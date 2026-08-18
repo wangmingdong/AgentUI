@@ -67,8 +67,21 @@ textarea { resize: vertical; }
 .status-ok { color: var(--green); font-size: 12px; }
 .status-fail { color: var(--red); font-size: 12px; }
 
-.usage { font-size: 13px; }
-.usage div { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+/* 设置页用量进度条（卡片内） */
+.usage { margin: 8px 0 2px; }
+.ubar { height: 8px; background: #eceef1; border-radius: 999px; overflow: hidden; }
+.ubar-fill { height: 100%; width: 0%; background: var(--green); border-radius: 999px; transition: width .35s ease; }
+.ubar-fill.warn { background: var(--amber); }
+.ubar-fill.danger { background: var(--red); }
+.umeta { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+
+/* 顶部用量概览（按平台列出） */
+.usage-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+@media (max-width: 720px) { .usage-list { grid-template-columns: 1fr; } }
+.usage-row { font-size: 12px; color: var(--text); }
+.usage-row .urow-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.usage-row .urow-name { font-weight: 600; }
+.usage-row .urow-num { color: var(--muted); }
 
 .steps { font-size: 13px; }
 .step { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fafbfc; }
@@ -131,6 +144,8 @@ textarea { resize: vertical; }
 .composer textarea { width: 100%; min-height: 64px; }
 .composer-row { margin-top: 10px; }
 
-/* 按钮 loading / 禁用 */
+/* 按钮反馈 / loading / 禁用 */
 .btn:disabled { opacity: .6; cursor: not-allowed; }
 .btn.loading { position: relative; }
+.btn.ok { background: var(--green); color: #fff; border-color: var(--green); }
+.btn.fail { background: var(--red); color: #fff; border-color: var(--red); }

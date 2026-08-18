@@ -13,14 +13,17 @@ document.querySelectorAll(".tab").forEach((t) => {
 });
 
 // ---------- 加载配置 + 平台 ----------
+let USAGE = {}; // 全局用量（来自 /api/config）
+
 async function refresh() {
   const [provRes, cfgRes] = await Promise.all([
     fetch("/api/providers").then((r) => r.json()),
     fetch("/api/config").then((r) => r.json()),
   ]);
+  USAGE = cfgRes.usage || {};
   renderModelSelect(provRes.providers, cfgRes);
   renderProviders(provRes.providers);
-  renderUsage(cfgRes.usage);
+  renderUsage(USAGE, provRes.providers);
 }
 
 function renderModelSelect(providers, cfg) {
@@ -56,52 +59,135 @@ function renderProviders(providers) {
     const tags =
       (p.free ? '<span class="tag free">免费</span>' : '<span class="tag paid">付费</span>') +
       (p.requires_key ? "" : '<span class="tag noreq">免Key</span>');
+    const discovery = p.discover_url
+      ? `<div class="meta"><a href="${p.discover_url}" target="_blank" rel="noopener">🔗 官方发现页</a></div>`
+      : "";
     card.innerHTML = `
       <h3>${p.name} ${tags}</h3>
-      <div class="meta">${p.base_url}<br>限速：${p.rate_limit}</div>
+      <div class="meta">${p.base_url}</div>
+      <div class="meta">限速：${p.rate_limit}</div>
       <div class="models">免费模型：${(p.free_models || []).join("、") || "—"}</div>
-      <div class="meta">${p.note}</div>
+      ${discovery}
+      <div class="meta note">${p.note}</div>
       <input type="password" class="tok" placeholder="API Key（${p.has_token ? "已配置" : "未配置"}）" />
+      <div class="usage">
+        <div class="ubar"><div class="ubar-fill"></div></div>
+        <div class="umeta"></div>
+      </div>
       <div class="actions">
         <button class="btn" data-act="save">保存</button>
         <button class="btn" data-act="test">测连通</button>
         <span class="tstatus"></span>
       </div>`;
+
     const tokInput = card.querySelector(".tok");
-    card.querySelector('[data-act="save"]').addEventListener("click", async () => {
-      await fetch("/api/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider_key: p.key, api_key: tokInput.value.trim() }),
-      });
-      tokInput.placeholder = tokInput.value.trim() ? "已配置" : "未配置";
+    const saveBtn = card.querySelector('[data-act="save"]');
+    const testBtn = card.querySelector('[data-act="test"]');
+    const st = card.querySelector(".tstatus");
+    const fill = card.querySelector(".ubar-fill");
+    const umeta = card.querySelector(".umeta");
+
+    // 用量进度条（累计调用 vs 参考限额）
+    const u = USAGE[p.key] || { calls: 0, tokens: 0 };
+    const quota = p.quota_hint || 0;
+    const pct = quota ? Math.min(u.calls / quota, 1) * 100 : 0;
+    fill.style.width = pct.toFixed(0) + "%";
+    fill.classList.toggle("warn", pct >= 70 && pct < 90);
+    fill.classList.toggle("danger", pct >= 90);
+    umeta.textContent = `用量：已调用 ${u.calls} 次 · 约 ${u.tokens} tokens（参考上限 ${quota || "?"} 次/周期，仅供参考）`;
+
+    // 保存：反馈 + 防抖
+    saveBtn.addEventListener("click", async () => {
+      if (saveBtn.disabled) return; // 防抖：请求期间禁止重复点击
+      const key = tokInput.value.trim();
+      saveBtn.disabled = true;
+      const orig = saveBtn.textContent;
+      saveBtn.textContent = "保存中…";
+      saveBtn.classList.remove("ok", "fail");
+      try {
+        const r = await fetch("/api/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider_key: p.key, api_key: key }),
+        });
+        if (r.ok) {
+          saveBtn.textContent = "✓ 已保存";
+          saveBtn.classList.add("ok");
+          tokInput.placeholder = key ? "已配置" : "未配置";
+          if (key) tokInput.value = ""; // 清空明文，避免残留
+        } else {
+          saveBtn.textContent = "✗ 保存失败";
+          saveBtn.classList.add("fail");
+        }
+      } catch (e) {
+        saveBtn.textContent = "✗ 保存失败";
+        saveBtn.classList.add("fail");
+      } finally {
+        setTimeout(() => {
+          saveBtn.textContent = orig;
+          saveBtn.disabled = false;
+          saveBtn.classList.remove("ok", "fail");
+        }, 2200);
+      }
     });
-    card.querySelector('[data-act="test"]').addEventListener("click", async (e) => {
-      const st = card.querySelector(".tstatus");
-      st.textContent = "测试中...";
+
+    // 测连通：loading 提示 + 防抖
+    testBtn.addEventListener("click", async () => {
+      if (testBtn.disabled) return; // 防抖
+      testBtn.disabled = true;
+      st.textContent = "测试中…";
       st.className = "tstatus";
-      const r = await fetch("/api/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider_key: p.key }),
-      }).then((x) => x.json());
-      st.textContent = r.message;
-      st.className = "tstatus " + (r.ok ? "status-ok" : "status-fail");
+      try {
+        const r = await fetch("/api/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider_key: p.key }),
+        }).then((x) => x.json());
+        st.textContent = r.message;
+        st.className = "tstatus " + (r.ok ? "status-ok" : "status-fail");
+        // 测连通成功说明调用数 +1，刷新进度条
+        if (r.ok) refresh();
+      } catch (e) {
+        st.textContent = "请求出错：" + e.message;
+        st.className = "tstatus status-fail";
+      } finally {
+        testBtn.disabled = false;
+      }
     });
+
     box.appendChild(card);
   });
 }
 
-function renderUsage(usage) {
+function renderUsage(usage, providers) {
   const box = $("#usage");
+  const quotaMap = {};
+  const nameMap = {};
+  (providers || []).forEach((p) => {
+    quotaMap[p.key] = p.quota_hint || 0;
+    nameMap[p.key] = p.name;
+  });
   const keys = Object.keys(usage || {});
   if (!keys.length) {
-    box.innerHTML = '<div class="meta">还没有调用记录。</div>';
+    box.innerHTML = '<div class="meta">还没有调用记录。用一次就会显示在这里和每张平台卡片上。</div>';
     return;
   }
-  box.innerHTML = keys
-    .map((k) => `<div>${k}：调用 ${usage[k].calls} 次，约 ${usage[k].tokens} tokens</div>`)
-    .join("");
+  box.innerHTML =
+    '<div class="usage-list">' +
+    keys
+      .map((k) => {
+        const u = usage[k];
+        const quota = quotaMap[k] || 0;
+        const pct = quota ? Math.min(u.calls / quota, 1) * 100 : 0;
+        const cls = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+        return `<div class="usage-row">
+          <div class="urow-head"><span class="urow-name">${nameMap[k] || k}</span>
+          <span class="urow-num">${u.calls} 次 · 约 ${u.tokens} tokens</span></div>
+          <div class="ubar"><div class="ubar-fill ${cls}" style="width:${pct.toFixed(0)}%"></div></div>
+        </div>`;
+      })
+      .join("") +
+    "</div>";
 }
 
 // ---------- 保存默认模型 ----------

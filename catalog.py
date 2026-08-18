@@ -193,6 +193,22 @@ PREFIX_TO_KEY = {
 }
 KEY_TO_PREFIX = {v: k for k, v in PREFIX_TO_KEY.items()}
 
+# 免费档「参考限额」（单位=调用次数/周期），仅用于前端用量进度条分母与直观参考。
+# 注意：各免费 API 真实限制多为 RPM/RPD/IP 限速，并非严格总量配额；
+# 这里的数值是粗略估计，进度条只作「用了多少」的直观提示，不代表硬性上限。
+QUOTA_HINT = {
+    "opencode_zen": 200,      # 匿名约 100~400/天（按 IP）
+    "sensenova": 1500,        # 6.7-flash-lite 1500/5h
+    "nvidia_nim": 1000,       # 40 RPM，按天宽松参考
+    "zhipu": 200,             # 免费档粗略
+    "aliyun_bailian": 200,    # 新用户免费额度粗略
+    "minimax": 200,           # 随 NVIDIA NIM
+    "stepfun": 200,           # 随 NVIDIA NIM
+    "openrouter": 200,        # 200 RPD（每模型）
+    "siliconflow": 1000,      # 1000 RPM
+    "modelscope": 2000,       # 2000 RPD
+}
+
 
 def prefix_of(key: str) -> str:
     return KEY_TO_PREFIX.get(key, key)
@@ -211,6 +227,7 @@ def list_providers(config_tokens: dict) -> list:
             "has_token": has_key,
             "base_url": p["base_url"],
             "discover_url": p.get("discover_url", ""),
+            "quota_hint": QUOTA_HINT.get(key, 0),
             "auth": p["auth"],
             "prefix": prefix_of(key),
             "free_models": p["free_models"],

@@ -54,6 +54,7 @@ def _send_file(handler, path):
     handler.send_response(200)
     handler.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
     handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Connection", "close")
     handler.end_headers()
     handler.wfile.write(body)
 

@@ -50,6 +50,7 @@ PROVIDERS = {
     "nvidia_nim": {
         "name": "英伟达 NVIDIA NIM",
         "base_url": "https://integrate.api.nvidia.com/v1",
+        "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
@@ -64,7 +65,9 @@ PROVIDERS = {
             "nvidia/nemotron-3-ultra-550b-a55b",
         ],
         "rate_limit": "40 RPM",
-        "note": "注册 NVIDIA 开发者账号拿 Key。一个 Key 同时覆盖智谱/阶跃/MiniMax/Kimi 的免费模型，很划算。",
+        "note": "注册 NVIDIA 开发者账号拿 Key。一个 Key 同时覆盖智谱/阶跃/MiniMax/Kimi 的免费模型，很划算。"
+              "官网发现页（找免费模型/各模型专属 endpoint）：https://build.nvidia.com/explore/discover 。"
+              "注意：base_url 必须是 integrate.api.nvidia.com/v1 才能调用，discover 页仅用于浏览，不能直接当 API 地址。",
     },
     "zhipu": {
         "name": "智谱 Zhipu / BigModel",
@@ -98,6 +101,7 @@ PROVIDERS = {
     "minimax": {
         "name": "MiniMax（经 NVIDIA NIM 免费）",
         "base_url": "https://integrate.api.nvidia.com/v1",
+        "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
@@ -110,6 +114,7 @@ PROVIDERS = {
     "stepfun": {
         "name": "阶跃星辰 StepFun（经 NVIDIA NIM 免费）",
         "base_url": "https://integrate.api.nvidia.com/v1",
+        "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
@@ -203,6 +208,7 @@ def list_providers(config_tokens: dict) -> list:
             "requires_key": p["requires_key"],
             "has_token": has_key,
             "base_url": p["base_url"],
+            "discover_url": p.get("discover_url", ""),
             "auth": p["auth"],
             "prefix": prefix_of(key),
             "free_models": p["free_models"],

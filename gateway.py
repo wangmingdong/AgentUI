@@ -259,6 +259,9 @@ def chat_completion_stream(payload: dict):
     路由/鉴权/fallback 复用与非流式一致；主平台失败（且允许 fallback）时
     降级到 OpenCode Zen 匿名通道（也走 stream）。上游不支持 stream 时，
     _stream_once 内部降级为一次性完整文本。
+
+    注意：这里把 fallback 做"透明"处理——主平台挂掉时不把错误吐给调用方，
+    而是继续试兜底；只有兜底也失败才一次性返回聚合错误。
     """
     model = payload.get("model", "")
     default_provider, _ = get_defaults()
@@ -282,9 +285,7 @@ def chat_completion_stream(payload: dict):
         try:
             headers = _build_headers(pinfo, token)
         except RuntimeError as e:
-            last_err = str(e)
-            if pk == provider_key:
-                yield f"[错误] {e}"
+            last_err = f"{pk}->{e}"
             continue
         url = pinfo["base_url"].rstrip("/") + "/chat/completions"
         out = dict(payload)
@@ -302,13 +303,9 @@ def chat_completion_stream(payload: dict):
             except Exception:
                 pass
             last_err = f"{pk}->{e.code}:{err_body}"
-            if pk == provider_key:
-                yield f"[错误] 模型调用失败（{pk} {e.code}）: {err_body}"
             continue
         except Exception as e:
             last_err = f"{pk}->{e}"
-            if pk == provider_key:
-                yield f"[错误] 流式请求异常: {e}"
             continue
 
     yield f"[错误] 流式请求失败（{last_err}）"

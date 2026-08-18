@@ -765,7 +765,14 @@ async function runAgent() {
   const task = raw.replace(/@[^\s@]+/g, "").replace(/\s+/g, " ").trim();
   if (!task && !files.length && !state.images.length) return;
 
-  appendLocalUser(task, state.images);
+  // 发送后立即清空输入框与图片预览
+  $("#taskInput").value = "";
+  closeMentions();
+  const imagesToSend = state.images;
+  state.images = [];
+  renderImgPreview();
+
+  appendLocalUser(task, imagesToSend);
   const a = appendLocalAssistant();
   state.toolCards = [];
   $("#stepList").innerHTML = "";
@@ -776,13 +783,11 @@ async function runAgent() {
     workspace: state.currentWorkspace,
     vision_mode: $("#visionChk").checked,
     files,
-    images: state.images,
+    images: imagesToSend,
     conversation_id: state.currentConvId || "",
   };
   await streamAgent(body, a);
   setRunning(false);
-  state.images = [];
-  renderImgPreview();
 }
 
 async function regenerate() {

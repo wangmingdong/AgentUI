@@ -1,0 +1,27 @@
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+
+# ===== 运行时生成（agent 执行沙箱、日志） =====
+agent_workspace/
+*.log
+
+# ===== 密钥 / 用户配置（含真实 token，严禁提交） =====
+tokens.json
+
+# ===== WorkBuddy 项目记忆（含会话与敏感数据） =====
+.workbuddy/
+
+# ===== 系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Tauri 构建产物 =====
+src-tauri/target/
+src-tauri/gen/

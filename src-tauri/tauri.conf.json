@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentShell",
+  "version": "0.1.0",
+  "identifier": "com.agentshell.app",
+  "build": {
+    "beforeDevCommand": "python ../server.py",
+    "devUrl": "http://localhost:8787",
+    "beforeBuildCommand": "",
+    "frontendDist": "../static"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AgentShell",
+        "width": 1100,
+        "height": 760,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentShell · 多平台 Agent 壳子</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">AgentShell <span class="sub">多平台 Token 壳子 · 操作电脑写程序</span></div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="settings">设置 / Token</button>
+      <button class="tab" data-tab="agent">Agent 干活</button>
+    </nav>
+  </header>
+
+  <!-- 设置页 -->
+  <section id="settings" class="panel active">
+    <div class="card">
+      <h2>默认模型</h2>
+      <p class="hint">所有聊天与 Agent 都走这里选的模型。默认是 OpenCode Zen 匿名通道，零门槛免 Key。</p>
+      <div class="row">
+        <label>模型</label>
+        <select id="modelSelect"></select>
+        <button id="saveDefault" class="btn">保存默认</button>
+      </div>
+      <div id="defaultMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>平台 Token 配置</h2>
+      <p class="hint">免费平台大多填了 Key 才用「专属额度」；OpenCode Zen 不填也能匿名用。贴完点「测连通」。</p>
+      <div id="providers" class="providers"></div>
+    </div>
+
+    <div class="card">
+      <h2>用量</h2>
+      <div id="usage" class="usage"></div>
+    </div>
+  </section>
+
+  <!-- Agent 页 -->
+  <section id="agent" class="panel">
+    <div class="card">
+      <h2>下达任务</h2>
+      <p class="hint">用中文描述你想让它做的事，例如：「在 workspace 里写一个 Python 版猜数字游戏并运行测试」。</p>
+      <textarea id="taskInput" rows="4" placeholder="让它帮你写程序 / 跑命令 / 整理文件 ..."></textarea>
+      <div class="row">
+        <button id="runAgent" class="btn primary">运行 Agent</button>
+        <span id="agentStatus" class="status"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>执行过程</h2>
+      <div id="steps" class="steps"></div>
+    </div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

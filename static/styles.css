@@ -62,6 +62,11 @@ textarea { resize: vertical; }
 .tag.noreq { background: #eee9fb; color: var(--primary); }
 .pcard .meta { font-size: 11px; color: var(--muted); margin: 6px 0; line-height: 1.5; }
 .pcard .models { font-size: 11px; color: var(--text); margin: 6px 0; word-break: break-all; }
+.pcard .note {
+  font-size: 11px; color: var(--muted); line-height: 1.6;
+  background: #f3f4f6; padding: 8px 10px; border-radius: 7px; margin: 8px 0;
+  word-break: break-word;
+}
 .pcard .portal { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .pcard .portal-link {
   display: inline-block; font-size: 12px; color: var(--primary); text-decoration: none;
@@ -69,10 +74,16 @@ textarea { resize: vertical; }
   padding: 4px 10px; border-radius: 7px;
 }
 .pcard .portal-link:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
-.pcard .actions { display: flex; gap: 8px; margin-top: 8px; }
+.pcard .tok { margin: 8px 0 4px; }
+.pcard .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .pcard .actions .btn { padding: 6px 12px; font-size: 12px; }
-.status-ok { color: var(--green); font-size: 12px; }
-.status-fail { color: var(--red); font-size: 12px; }
+.pcard .tstatus {
+  display: block; width: 100%; margin-top: 8px; padding: 8px 10px; border-radius: 7px;
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.pcard .tstatus:empty { display: none; }
+.status-ok { color: var(--green); background: #e7f6ee; }
+.status-fail { color: var(--red); background: #fdecec; }
 
 /* 设置页用量进度条（卡片内） */
 .usage { margin: 8px 0 2px; }
@@ -80,7 +91,7 @@ textarea { resize: vertical; }
 .ubar-fill { height: 100%; width: 0%; background: var(--green); border-radius: 999px; transition: width .35s ease; }
 .ubar-fill.warn { background: var(--amber); }
 .ubar-fill.danger { background: var(--red); }
-.umeta { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+.umeta { font-size: 11px; color: var(--muted); margin: 6px 0 12px; line-height: 1.5; }
 
 /* 顶部用量概览（按平台列出） */
 .usage-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }

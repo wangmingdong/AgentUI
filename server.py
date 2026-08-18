@@ -12,10 +12,13 @@
 Tauri 壳子直接把这个地址当 devUrl 加载，就变成了原生桌面窗口。
 """
 
+import base64
+import hashlib
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import catalog
 import store
@@ -31,8 +34,38 @@ MIME = {
     ".js": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
     ".json": "application/json; charset=utf-8",
 }
+
+
+# 允许上传的图片后缀 -> mime
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
+def _save_image(workspace: str, filename: str, data_b64: str):
+    """把 base64 图片存到 workspace/uploads/ 下，返回 {rel,name,mime}。"""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in IMG_EXTS:
+        ext = ".png"
+    up_dir = os.path.join(workspace, "uploads")
+    os.makedirs(up_dir, exist_ok=True)
+    h = hashlib.md5((filename + str(time.time())).encode("utf-8")).hexdigest()[:12]
+    fname = h + ext
+    path = os.path.join(up_dir, fname)
+    try:
+        raw = base64.b64decode(data_b64, validate=True)
+    except Exception:
+        raw = base64.b64decode(data_b64)
+    with open(path, "wb") as f:
+        f.write(raw)
+    return {"rel": "uploads/" + fname, "name": filename,
+            "mime": MIME.get(ext, "application/octet-stream")}
 
 
 def _send_json(handler, obj, code=200):
@@ -96,6 +129,25 @@ class Handler(BaseHTTPRequestHandler):
             _send_file(self, os.path.join(STATIC_DIR, rel))
             return
 
+        # 1.5) 安全工作区文件访问（用于展示上传的图片，防越界）
+        if method == "GET" and path == "/file":
+            qs = parse_qs(parsed.query)
+            ws = qs.get("ws", [""])[0]
+            name = qs.get("name", [""])[0]
+            if not store.is_valid_workspace(ws):
+                self.send_error(403)
+                return
+            base = os.path.realpath(ws)
+            target = os.path.realpath(os.path.join(base, name))
+            if target != base and not target.startswith(base + os.sep):
+                self.send_error(403)
+                return
+            if not os.path.isfile(target):
+                self.send_error(404)
+                return
+            _send_file(self, target)
+            return
+
         # 2) provider 列表
         if method == "GET" and path == "/api/providers":
             _send_json(self, {"providers": catalog.list_providers(store.get_tokens())})
@@ -128,6 +180,25 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = gateway.test_connection(body.get("provider_key", ""))
             _send_json(self, {"ok": ok, "message": msg})
             return
+
+        # 6.5) 工作区间管理（增加/删/列）
+        if path == "/api/workspaces":
+            if method == "GET":
+                _send_json(self, {"workspaces": store.get_workspaces(),
+                                  "default": store.WORKSPACE_DIR})
+                return
+            if method == "POST":
+                body = _read_body(self)
+                ok, msg = store.add_workspace(body.get("path", ""))
+                _send_json(self, {"ok": ok, "message": msg,
+                                  "workspaces": store.get_workspaces()})
+                return
+            if method == "DELETE":
+                body = _read_body(self)
+                ok, msg = store.remove_workspace(body.get("path", ""))
+                _send_json(self, {"ok": ok, "message": msg,
+                                  "workspaces": store.get_workspaces()})
+                return
 
         # 7) OpenAI 兼容网关
         if method == "POST" and path == "/v1/chat/completions":
@@ -162,26 +233,44 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, {"ok": ok})
                 return
 
-        # 8) Agent 执行（带会话持久化）
+        # 8) Agent 执行（带会话持久化 + 工作区间 + 图片）
         if method == "POST" and path == "/api/agent":
             body = _read_body(self)
             task = (body.get("task", "") or "").strip()
             if not task:
                 _send_json(self, {"error": "任务为空"}, 400)
                 return
+            # 工作区间：非法则退回主工作区
+            ws = body.get("workspace") or ""
+            if not store.is_valid_workspace(ws):
+                ws = store.WORKSPACE_DIR
+            vision_mode = bool(body.get("vision_mode"))
+            # 存图
+            saved_images = []
+            for im in (body.get("images") or []):
+                if im.get("data"):
+                    si = _save_image(ws, im.get("filename", "image.png"), im["data"])
+                    si["data"] = im["data"]  # 透传给 agent 做多模态
+                    saved_images.append(si)
+
             cid = body.get("conversation_id") or ""
             conv = store.get_conversation(cid) if cid else None
             if not conv:
                 conv = store.new_conversation()
                 cid = conv["id"]
-            store.append_message(cid, "user", task)
+            # 用户消息带上图片附件（仅存展示所需 rel/name/ws）
+            attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
+            store.append_message(cid, "user", task, attachments=attachments)
             try:
-                steps = agent.run_agent(task)
+                steps = agent.run_agent(task, workspace=ws, images=saved_images,
+                                        vision_mode=vision_mode)
             except Exception as e:
                 steps = [{"type": "error", "text": f"Agent 执行异常：{e}"}]
             conv = store.append_message(cid, "assistant", _agent_summary(steps), steps)
             _send_json(self, {"conversation_id": cid, "steps": steps,
-                              "messages": conv["messages"]})
+                              "messages": conv["messages"],
+                              "workspace": ws,
+                              "images": attachments})
             return
 
         self.send_error(404)

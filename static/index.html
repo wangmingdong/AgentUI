@@ -48,10 +48,26 @@
         <div id="convItems" class="conv-items"></div>
       </aside>
       <div class="conv-main">
+        <div class="ws-bar">
+          <label>工作区间</label>
+          <select id="wsSelect"></select>
+          <button id="wsAdd" class="btn small">+ 添加目录</button>
+          <button id="wsDel" class="btn small danger">删除</button>
+          <span id="wsHint" class="ws-hint"></span>
+        </div>
         <div id="messages" class="messages">
           <div class="empty-hint">还没有对话，点左上「+ 新建对话」开始，或直接输入任务。</div>
         </div>
         <div class="composer">
+          <div class="composer-tools">
+            <button id="imgBtn" class="btn small" type="button">📎 图片</button>
+            <input type="file" id="imgInput" accept="image/*" multiple hidden />
+            <label class="vision-toggle" title="勾选后图片作为视觉输入直接传给支持多模态的模型">
+              <input type="checkbox" id="visionChk" checked /> 🖼 视觉输入
+            </label>
+            <span id="visionHint" class="ws-hint"></span>
+          </div>
+          <div id="imgPreview" class="img-preview"></div>
           <textarea id="taskInput" rows="3" placeholder="描述任务，Enter 发送，Shift+Enter 换行 ..."></textarea>
           <div class="row composer-row">
             <button id="runAgent" class="btn primary">运行 Agent</button>

@@ -24,6 +24,7 @@ async function refresh() {
   renderModelSelect(provRes.providers, cfgRes);
   renderProviders(provRes.providers);
   renderUsage(USAGE, provRes.providers);
+  window.__PROVIDERS__ = provRes.providers;
 }
 
 function renderModelSelect(providers, cfg) {
@@ -208,6 +209,44 @@ $("#saveDefault").addEventListener("click", async () => {
 //  多对话 + Agent 交互（按钮 loading 防抖、回车提交）
 // ============================================================
 let currentConvId = null;
+let currentWorkspace = "";   // 当前选中的工作区间绝对路径
+let pendingImages = [];      // 待上传图片 [{filename, data(base64), mime}]
+
+// ---------- 工作区间（增加/删除/切换） ----------
+async function loadWorkspaces() {
+  const r = await fetch("/api/workspaces").then((x) => x.json());
+  const sel = $("#wsSelect");
+  sel.innerHTML = "";
+  (r.workspaces || []).forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p + (p === r.default ? "（主）" : "");
+    sel.appendChild(opt);
+  });
+  if (currentWorkspace && (r.workspaces || []).includes(currentWorkspace)) {
+    sel.value = currentWorkspace;
+  } else {
+    currentWorkspace = r.default || (r.workspaces && r.workspaces[0]) || "";
+    if (currentWorkspace) sel.value = currentWorkspace;
+  }
+  updateVisionHint();
+}
+
+function currentProviderKey() {
+  const v = $("#modelSelect").value || "";
+  return v.split("/")[0];
+}
+
+function updateVisionHint() {
+  const hint = $("#visionHint");
+  const head = currentProviderKey();
+  const prov = (window.__PROVIDERS__ || []).find((p) => (p.prefix || p.key) === head);
+  if (!prov || !prov.vision) {
+    hint.textContent = "当前默认模型可能不支持看图；图片将存为文件供 Agent 处理。改用支持视觉的平台并勾选「视觉输入」可让模型直接看图。";
+  } else {
+    hint.textContent = "";
+  }
+}
 
 async function loadConversations() {
   const r = await fetch("/api/conversations").then((x) => x.json());
@@ -283,6 +322,18 @@ function renderMessage(m) {
 
   if (m.role === "user") {
     bubble.textContent = m.content;
+    if (m.attachments && m.attachments.length) {
+      const gal = document.createElement("div");
+      gal.className = "attach-gallery";
+      m.attachments.forEach((a) => {
+        const img = document.createElement("img");
+        img.className = "attach-img";
+        img.src = "/file?ws=" + encodeURIComponent(a.ws || currentWorkspace) + "&name=" + encodeURIComponent(a.rel);
+        img.alt = a.name || "";
+        gal.appendChild(img);
+      });
+      bubble.appendChild(gal);
+    }
   } else if (m.steps && m.steps.length) {
     const sum = document.createElement("div");
     sum.className = "bot-summary";
@@ -377,7 +428,7 @@ $("#taskInput").addEventListener("keydown", (e) => {
 async function runAgent() {
   const input = $("#taskInput");
   const task = input.value.trim();
-  if (!task) return;
+  if (!task && pendingImages.length === 0) return;
   const status = $("#agentStatus");
 
   setRunning(true);
@@ -394,10 +445,17 @@ async function runAgent() {
   box.scrollTop = box.scrollHeight;
 
   try {
+    const payload = {
+      task,
+      conversation_id: currentConvId || "",
+      workspace: currentWorkspace,
+      vision_mode: $("#visionChk").checked,
+      images: pendingImages,
+    };
     const r = await fetch("/api/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, conversation_id: currentConvId || "" }),
+      body: JSON.stringify(payload),
     }).then((x) => x.json());
 
     if (r.error) {
@@ -406,7 +464,10 @@ async function runAgent() {
       return;
     }
     currentConvId = r.conversation_id;
+    if (r.workspace) currentWorkspace = r.workspace;
     input.value = "";
+    pendingImages = [];
+    renderImgPreview();
     renderMessages(r.messages);
     status.textContent = "完成";
     loadConversations(); // 刷新左侧标题/列表
@@ -433,5 +494,104 @@ $("#newConv").addEventListener("click", async () => {
   $("#taskInput").focus();
 });
 
+// ---------- 工作区间：添加/删除/切换 ----------
+$("#wsSelect").addEventListener("change", () => {
+  currentWorkspace = $("#wsSelect").value;
+  updateVisionHint();
+});
+
+$("#wsAdd").addEventListener("click", async () => {
+  const p = prompt("输入要添加的工作目录绝对路径（Agent 将可在此目录内读写/执行）：");
+  if (!p) return;
+  const hint = $("#wsHint");
+  try {
+    const r = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: p.trim() }),
+    }).then((x) => x.json());
+    if (r.ok) {
+      hint.textContent = "✓ " + r.message;
+      hint.className = "ws-hint ok";
+      await loadWorkspaces();
+    } else {
+      hint.textContent = "✗ " + r.message;
+      hint.className = "ws-hint fail";
+    }
+  } catch (e) {
+    hint.textContent = "✗ 请求出错：" + e.message;
+    hint.className = "ws-hint fail";
+  } finally {
+    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
+  }
+});
+
+$("#wsDel").addEventListener("click", async () => {
+  const p = $("#wsSelect").value;
+  if (!p) return;
+  if (!confirm("移除工作区间「" + p + "」？\n（不会删除目录内文件，仅从本工具移除）")) return;
+  const hint = $("#wsHint");
+  try {
+    const r = await fetch("/api/workspaces", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: p }),
+    }).then((x) => x.json());
+    hint.textContent = (r.ok ? "✓ " : "✗ ") + r.message;
+    hint.className = "ws-hint " + (r.ok ? "ok" : "fail");
+    await loadWorkspaces();
+  } catch (e) {
+    hint.textContent = "✗ 请求出错：" + e.message;
+    hint.className = "ws-hint fail";
+  } finally {
+    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
+  }
+});
+
+// ---------- 图片上传 ----------
+$("#imgBtn").addEventListener("click", () => $("#imgInput").click());
+
+$("#imgInput").addEventListener("change", (e) => {
+  const files = [...e.target.files];
+  files.forEach((f) => {
+    if (!f.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const comma = dataUrl.indexOf(",");
+      const meta = dataUrl.slice(0, comma);
+      const mime = meta.slice(meta.indexOf(":") + 1, meta.indexOf(";"));
+      const data = dataUrl.slice(comma + 1);
+      pendingImages.push({ filename: f.name, data, mime });
+      renderImgPreview();
+    };
+    reader.readAsDataURL(f);
+  });
+  e.target.value = "";
+});
+
+function renderImgPreview() {
+  const box = $("#imgPreview");
+  box.innerHTML = "";
+  pendingImages.forEach((im, idx) => {
+    const wrap = document.createElement("div");
+    wrap.className = "thumb";
+    const img = document.createElement("img");
+    img.src = "data:" + im.mime + ";base64," + im.data;
+    const del = document.createElement("button");
+    del.className = "thumb-del";
+    del.textContent = "×";
+    del.title = "移除";
+    del.addEventListener("click", () => {
+      pendingImages.splice(idx, 1);
+      renderImgPreview();
+    });
+    wrap.append(img, del);
+    box.appendChild(wrap);
+  });
+}
+
 refresh();
 loadConversations();
+loadWorkspaces();
+$("#modelSelect").addEventListener("change", updateVisionHint);

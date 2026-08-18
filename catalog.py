@@ -177,6 +177,16 @@ PROVIDERS = {
 }
 
 
+# ===== 视觉/多模态能力标记：该平台是否提供（可免费使用的）视觉模型 =====
+# 仅用于前端「视觉输入」开关的智能提示；是否真能看图还取决于当前选的具体模型。
+VISION_PROVIDERS = {
+    "sensenova", "nvidia_nim", "zhipu", "aliyun_bailian",
+    "minimax", "stepfun", "openrouter", "siliconflow", "modelscope",
+}
+for _k in PROVIDERS:
+    PROVIDERS[_k]["vision"] = _k in VISION_PROVIDERS
+
+
 # 模型命名用的短前缀（model 形如 "zen/deepseek-v4-flash-free"）
 # key 是内部标识（也用于 token 存储），prefix 是给人用的短名。
 PREFIX_TO_KEY = {
@@ -233,6 +243,7 @@ def list_providers(config_tokens: dict) -> list:
             "free_models": p["free_models"],
             "rate_limit": p["rate_limit"],
             "note": p["note"],
+            "vision": p.get("vision", False),
         })
     return out
 

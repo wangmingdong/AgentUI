@@ -9,7 +9,12 @@ env/
 
 # ===== 运行时生成（agent 执行沙箱、日志） =====
 agent_workspace/
+uploads/
 *.log
+
+# ===== 本地冒烟测试脚本（不提交） =====
+test_*.py
+smoke_*.py
 
 # ===== 密钥 / 用户配置（含真实 token，严禁提交） =====
 tokens.json

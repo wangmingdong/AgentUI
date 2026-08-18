@@ -249,10 +249,18 @@ function currentProviderKey() {
 
 function updateVisionHint() {
   const hint = $("#visionHint");
-  const head = currentProviderKey();
+  const val = $("#modelSelect").value || "";
+  const head = val.split("/")[0];
+  const modelId = val.slice(head.length + 1);
   const prov = (window.__PROVIDERS__ || []).find((p) => (p.prefix || p.key) === head);
   if (!prov || !prov.vision) {
     hint.textContent = "当前默认模型可能不支持看图；图片将存为文件供 Agent 处理。改用支持视觉的平台并勾选「视觉输入」可让模型直接看图。";
+    return;
+  }
+  // 平台有视觉能力，但只有部分模型支持看图（如商汤仅 6.8-flash-lite）
+  const vm = prov.vision_models || [];
+  if (vm.length && !vm.includes(modelId)) {
+    hint.textContent = "当前选的「" + modelId + "」可能不支持看图；改用该平台支持视觉的模型（如 " + vm.join("、") + "）并勾选「视觉输入」可让模型直接看图。图片也可存为文件供 Agent 处理。";
   } else {
     hint.textContent = "";
   }

@@ -36,18 +36,22 @@ PROVIDERS = {
     },
     "sensenova": {
         "name": "商汤 SenseNova",
-        "console_url": "https://www.sensenova.cn/",
+        "console_url": "https://platform.sensenova.cn/console/keys",
         "base_url": "https://token.sensenova.cn/v1",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
         "free_models": [
-            "sensenova-6.7-flash-lite",
-            "deepseek-v4-flash",
-            "glm-5.2",
+            "sensenova-6.8-flash-lite",   # 轻量多模态智能体模型，当前定价 0（免费），1500/5h
+            "deepseek-v4-flash",          # 500/5h，支持思考/非思考、1M 上下文、工具调用
+            "glm-5.2",                   # 500/5h，1M 上下文、128K 最大输出
         ],
-        "rate_limit": "sensenova-6.7-flash-lite 1500/5h；deepseek-v4-flash 500/5h",
-        "note": "注册开放平台拿 API Key；token.sensenova.cn 是 OpenAI 兼容的 token 端点。",
+        "vision_models": ["sensenova-6.8-flash-lite"],  # 仅该模型支持图片输入（png/jpeg/gif/webp）
+        "rate_limit": "sensenova-6.8-flash-lite 1500/5h；deepseek-v4-flash 500/5h；glm-5.2 500/5h",
+        "note": "注册 platform.sensenova.cn 拿 API Key（控制台 → API Keys）。base_url=token.sensenova.cn/v1 是 OpenAI 兼容端点，"
+                "Authorization: Bearer 鉴权。免费主力 sensenova-6.8-flash-lite 当前定价 0（真免费），且支持图片输入/函数调用/流式；"
+                "想让 Agent 直接看图，请在模型里选它并勾选「视觉输入」。deepseek-v4-flash 与 glm-5.2 仅文本+工具，不支持看图。"
+                "注：旧名 sensenova-6.7-flash-lite 会重定向到 6.8，但建议直接用 6.8。图像生成专用模型 sensenova-u1-fast 走 images/generations 接口，不在对话模型之列。",
     },
     "nvidia_nim": {
         "name": "英伟达 NVIDIA NIM",
@@ -255,6 +259,7 @@ def list_providers(config_tokens: dict) -> list:
             "rate_limit": p["rate_limit"],
             "note": p["note"],
             "vision": p.get("vision", False),
+            "vision_models": p.get("vision_models", []),
         })
     return out
 

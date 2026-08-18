@@ -60,10 +60,10 @@ function renderProviders(providers) {
     const tags =
       (p.free ? '<span class="tag free">免费</span>' : '<span class="tag paid">付费</span>') +
       (p.requires_key ? "" : '<span class="tag noreq">免Key</span>');
-    // 访问入口页（申请/管理 Token）+ 官方发现页（仅 NVIDIA 系有）
+    // 访问入口页（申请/管理 Token）+ 官方发现页（仅英伟达有，且明确标注 NVIDIA 避免误以为是当前平台）
     const links = [
       p.console_url ? `<a class="portal-link" href="${p.console_url}" target="_blank" rel="noopener">🔗 访问入口页（申请 / 管理 Token）</a>` : "",
-      p.discover_url ? `<a class="portal-link" href="${p.discover_url}" target="_blank" rel="noopener">🧭 官方发现页</a>` : "",
+      p.discover_url ? `<a class="portal-link" href="${p.discover_url}" target="_blank" rel="noopener">🧭 NVIDIA 官方发现页（查免费模型）</a>` : "",
     ].filter(Boolean).join("");
     const portal = links ? `<div class="portal">${links}</div>` : "";
     card.innerHTML = `

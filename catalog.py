@@ -36,7 +36,7 @@ PROVIDERS = {
     },
     "sensenova": {
         "name": "商汤 SenseNova",
-        "console_url": "https://platform.sensenova.cn/console/keys",
+        "console_url": "https://platform.sensenova.cn/console",
         "base_url": "https://token.sensenova.cn/v1",
         "auth": "bearer",
         "requires_key": True,
@@ -120,7 +120,6 @@ PROVIDERS = {
         "name": "MiniMax（经 NVIDIA NIM 免费）",
         "console_url": "https://www.minimaxi.com/",
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
@@ -136,7 +135,6 @@ PROVIDERS = {
         "name": "阶跃星辰 StepFun（经 NVIDIA NIM 免费）",
         "console_url": "https://www.stepfun.com/",
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
         "requires_key": True,
         "free": True,
@@ -184,7 +182,7 @@ PROVIDERS = {
     },
     "modelscope": {
         "name": "ModelScope 魔搭（聚合）",
-        "console_url": "https://modelscope.cn/my/myaccesstoken",
+        "console_url": "https://www.modelscope.cn/my/overview",
         "base_url": "https://api-inference.modelscope.cn/v1/",
         "auth": "bearer",
         "requires_key": True,

@@ -118,47 +118,234 @@ $("#saveDefault").addEventListener("click", async () => {
   setTimeout(() => (msg.textContent = ""), 2500);
 });
 
-// ---------- 运行 Agent ----------
-$("#runAgent").addEventListener("click", async () => {
-  const task = $("#taskInput").value.trim();
-  if (!task) return;
-  const stepsBox = $("#steps");
-  const status = $("#agentStatus");
-  stepsBox.innerHTML = "";
-  status.textContent = "Agent 执行中...";
-  $("#runAgent").disabled = true;
+// ============================================================
+//  多对话 + Agent 交互（按钮 loading 防抖、回车提交）
+// ============================================================
+let currentConvId = null;
 
-  const r = await fetch("/api/agent", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task }),
-  }).then((x) => x.json());
+async function loadConversations() {
+  const r = await fetch("/api/conversations").then((x) => x.json());
+  renderConvList(r.conversations || []);
+  if (!currentConvId && (r.conversations || []).length) {
+    selectConv(r.conversations[0].id);
+  }
+}
 
-  (r.steps || []).forEach((s) => stepsBox.appendChild(renderStep(s)));
-  status.textContent = "完成";
-  $("#runAgent").disabled = false;
-  stepsBox.scrollTop = stepsBox.scrollHeight;
-});
+function renderConvList(convs) {
+  const box = $("#convItems");
+  box.innerHTML = "";
+  if (!convs.length) {
+    box.innerHTML = '<div class="conv-empty">还没有对话</div>';
+    return;
+  }
+  convs.forEach((c) => {
+    const item = document.createElement("div");
+    item.className = "conv-item" + (c.id === currentConvId ? " active" : "");
+    const title = document.createElement("span");
+    title.className = "conv-title";
+    title.textContent = c.title || "新对话";
+    title.addEventListener("click", () => selectConv(c.id));
+    const del = document.createElement("button");
+    del.className = "conv-del";
+    del.title = "删除对话";
+    del.textContent = "×";
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("确定删除这个对话？")) return;
+      await fetch("/api/conversations/" + c.id, { method: "DELETE" });
+      if (c.id === currentConvId) {
+        currentConvId = null;
+        $("#messages").innerHTML = '<div class="empty-hint">已删除，点「+ 新建对话」开始。</div>';
+      }
+      loadConversations();
+    });
+    item.append(title, del);
+    box.appendChild(item);
+  });
+}
+
+async function selectConv(id) {
+  currentConvId = id;
+  const list = await fetch("/api/conversations").then((x) => x.json());
+  renderConvList(list.conversations || []);
+  const r = await fetch("/api/conversations/" + id).then((x) => x.json());
+  renderMessages(r.conversation ? r.conversation.messages : []);
+}
+
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderMessages(messages) {
+  const box = $("#messages");
+  box.innerHTML = "";
+  if (!messages || !messages.length) {
+    box.innerHTML = '<div class="empty-hint">这个对话还是空的，输入任务开聊吧。</div>';
+    return;
+  }
+  messages.forEach((m) => box.appendChild(renderMessage(m)));
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderMessage(m) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (m.role === "user" ? "msg-user" : "msg-bot");
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  if (m.role === "user") {
+    bubble.textContent = m.content;
+  } else if (m.steps && m.steps.length) {
+    const sum = document.createElement("div");
+    sum.className = "bot-summary";
+    sum.textContent = m.content || "（无文本回答）";
+    bubble.appendChild(sum);
+    const toggle = document.createElement("button");
+    toggle.className = "step-toggle";
+    const stepsBox = document.createElement("div");
+    stepsBox.className = "steps hidden";
+    m.steps.forEach((s) => stepsBox.appendChild(renderStep(s)));
+    toggle.textContent = "▸ 查看执行过程 (" + m.steps.length + " 步)";
+    toggle.addEventListener("click", () => {
+      const hidden = stepsBox.classList.toggle("hidden");
+      toggle.textContent = (hidden ? "▸" : "▾") + " 查看执行过程 (" + m.steps.length + " 步)";
+    });
+    bubble.appendChild(toggle);
+    bubble.appendChild(stepsBox);
+  } else {
+    bubble.textContent = m.content || "（无内容）";
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  meta.textContent = fmtTime(m.ts);
+  wrap.append(bubble, meta);
+  return wrap;
+}
 
 function renderStep(s) {
   const div = document.createElement("div");
   div.className = "step";
   if (s.type === "llm") {
-    div.innerHTML = `<div class="label">模型思考（${s.provider || ""}）</div><div class="text"></div>`;
-    div.querySelector(".text").textContent = s.text || "";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = "模型思考（" + (s.provider || "") + "）";
+    const text = document.createElement("div");
+    text.className = "text";
+    text.textContent = s.text || "";
+    div.append(label, text);
   } else if (s.type === "tool") {
-    div.innerHTML = `<div class="label">调用工具：<span class="tool">${s.tool}</span></div>
-      <pre></pre>`;
-    div.querySelector("pre").textContent =
+    const label = document.createElement("div");
+    label.className = "label";
+    const t = document.createElement("span");
+    t.className = "tool";
+    t.textContent = s.tool;
+    label.textContent = "调用工具：";
+    label.appendChild(t);
+    const pre = document.createElement("pre");
+    pre.textContent =
       "参数: " + JSON.stringify(s.args, null, 2) + "\n\n结果:\n" + (s.output || "");
+    div.append(label, pre);
   } else if (s.type === "done") {
-    div.innerHTML = `<div class="label">最终回答</div><div class="text"></div>`;
-    div.querySelector(".text").textContent = s.text || "";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = "最终回答";
+    const text = document.createElement("div");
+    text.className = "text";
+    text.textContent = s.text || "";
+    div.append(label, text);
   } else if (s.type === "error") {
-    div.innerHTML = `<div class="label" style="color:var(--red)">出错</div><div class="text"></div>`;
-    div.querySelector(".text").textContent = s.text || "";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.style.color = "var(--red)";
+    label.textContent = "出错";
+    const text = document.createElement("div");
+    text.className = "text";
+    text.textContent = s.text || "";
+    div.append(label, text);
   }
   return div;
 }
 
+// ---------- 运行 Agent（loading 防抖 + 回车触发） ----------
+function setRunning(running) {
+  const btn = $("#runAgent");
+  const input = $("#taskInput");
+  btn.disabled = running;
+  input.disabled = running;
+  btn.textContent = running ? "运行中…" : "运行 Agent";
+  btn.classList.toggle("loading", running);
+}
+
+$("#runAgent").addEventListener("click", () => runAgent());
+
+$("#taskInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    runAgent();
+  }
+});
+
+async function runAgent() {
+  const input = $("#taskInput");
+  const task = input.value.trim();
+  if (!task) return;
+  const status = $("#agentStatus");
+
+  setRunning(true);
+  status.textContent = "Agent 执行中…";
+
+  // 先放一个临时「思考中」气泡，避免等待期间无反馈
+  const box = $("#messages");
+  const emptyHint = box.querySelector(".empty-hint");
+  if (emptyHint) box.innerHTML = "";
+  const tmp = document.createElement("div");
+  tmp.className = "msg msg-bot";
+  tmp.innerHTML = '<div class="bubble loading-bubble">⏳ 正在规划与执行，请稍候…</div>';
+  box.appendChild(tmp);
+  box.scrollTop = box.scrollHeight;
+
+  try {
+    const r = await fetch("/api/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, conversation_id: currentConvId || "" }),
+    }).then((x) => x.json());
+
+    if (r.error) {
+      status.textContent = "失败：" + r.error;
+      tmp.querySelector(".bubble").textContent = "⚠️ " + r.error;
+      return;
+    }
+    currentConvId = r.conversation_id;
+    input.value = "";
+    renderMessages(r.messages);
+    status.textContent = "完成";
+    loadConversations(); // 刷新左侧标题/列表
+  } catch (err) {
+    status.textContent = "请求出错：" + err.message;
+    if (currentConvId) {
+      const r2 = await fetch("/api/conversations/" + currentConvId).then((x) => x.json());
+      renderMessages(r2.conversation ? r2.conversation.messages : []);
+    } else {
+      tmp.querySelector(".bubble").textContent = "⚠️ 网络或服务器错误：" + err.message;
+    }
+  } finally {
+    setRunning(false);
+  }
+}
+
+// ---------- 新建对话 ----------
+$("#newConv").addEventListener("click", async () => {
+  const r = await fetch("/api/conversations", { method: "POST" })
+    .then((x) => x.json());
+  currentConvId = r.conversation.id;
+  await loadConversations();
+  $("#messages").innerHTML = '<div class="empty-hint">新对话已建好，输入任务开聊吧。</div>';
+  $("#taskInput").focus();
+});
+
 refresh();
+loadConversations();

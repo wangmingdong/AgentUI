@@ -77,3 +77,60 @@ textarea { resize: vertical; }
 .step pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 6px; overflow: auto; max-height: 280px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0; }
 .step .text { white-space: pre-wrap; line-height: 1.6; }
 .status { font-size: 12px; color: var(--muted); }
+
+/* ===== Agent 多对话布局 ===== */
+.agent-layout { display: flex; gap: 16px; align-items: stretch; min-height: 70vh; }
+.conv-side { width: 220px; flex: 0 0 220px; display: flex; flex-direction: column; gap: 10px; }
+.conv-side .block { width: 100%; }
+.conv-items { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 70vh; }
+.conv-empty { color: var(--muted); font-size: 12px; padding: 8px; }
+.conv-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); cursor: pointer; font-size: 13px;
+}
+.conv-item:hover { border-color: var(--primary); }
+.conv-item.active { background: var(--primary-soft); border-color: var(--primary); }
+.conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-del {
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 2px; opacity: 0; transition: opacity .15s;
+}
+.conv-item:hover .conv-del { opacity: 1; }
+.conv-del:hover { color: var(--red); }
+
+.conv-main { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.messages {
+  flex: 1; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px; overflow-y: auto; max-height: 62vh; min-height: 200px;
+}
+.empty-hint { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 10px; line-height: 1.7; }
+.msg { display: flex; flex-direction: column; margin-bottom: 14px; }
+.msg-user { align-items: flex-end; }
+.msg-bot { align-items: flex-start; }
+.bubble {
+  max-width: 80%; padding: 10px 13px; border-radius: 12px; font-size: 13px;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.msg-user .bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 3px; }
+.msg-bot .bubble { background: #f1f2f6; color: var(--text); border-bottom-left-radius: 3px; }
+.msg-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.bot-summary { font-weight: 500; }
+.loading-bubble { color: var(--muted); }
+
+.step-toggle {
+  margin-top: 8px; border: 1px dashed var(--border); background: #fff; color: var(--primary);
+  padding: 5px 10px; border-radius: 7px; cursor: pointer; font-size: 12px;
+}
+.steps.hidden { display: none; }
+.steps { margin-top: 8px; }
+
+.composer {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+}
+.composer textarea { width: 100%; min-height: 64px; }
+.composer-row { margin-top: 10px; }
+
+/* 按钮 loading / 禁用 */
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn.loading { position: relative; }

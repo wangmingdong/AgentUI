@@ -42,18 +42,23 @@
 
   <!-- Agent 页 -->
   <section id="agent" class="panel">
-    <div class="card">
-      <h2>下达任务</h2>
-      <p class="hint">用中文描述你想让它做的事，例如：「在 workspace 里写一个 Python 版猜数字游戏并运行测试」。</p>
-      <textarea id="taskInput" rows="4" placeholder="让它帮你写程序 / 跑命令 / 整理文件 ..."></textarea>
-      <div class="row">
-        <button id="runAgent" class="btn primary">运行 Agent</button>
-        <span id="agentStatus" class="status"></span>
+    <div class="agent-layout">
+      <aside class="conv-side">
+        <button id="newConv" class="btn primary block">+ 新建对话</button>
+        <div id="convItems" class="conv-items"></div>
+      </aside>
+      <div class="conv-main">
+        <div id="messages" class="messages">
+          <div class="empty-hint">还没有对话，点左上「+ 新建对话」开始，或直接输入任务。</div>
+        </div>
+        <div class="composer">
+          <textarea id="taskInput" rows="3" placeholder="描述任务，Enter 发送，Shift+Enter 换行 ..."></textarea>
+          <div class="row composer-row">
+            <button id="runAgent" class="btn primary">运行 Agent</button>
+            <span id="agentStatus" class="status"></span>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card">
-      <h2>执行过程</h2>
-      <div id="steps" class="steps"></div>
     </div>
   </section>
 

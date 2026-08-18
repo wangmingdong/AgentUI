@@ -69,6 +69,17 @@ def _read_body(handler):
         return {}
 
 
+def _agent_summary(steps):
+    """从 steps 里挑出给用户的「最终回答」文本。"""
+    for s in reversed(steps or []):
+        if s.get("type") in ("done", "error") and s.get("text"):
+            return s["text"]
+    for s in reversed(steps or []):
+        if s.get("type") == "llm" and s.get("text"):
+            return s["text"]
+    return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         parsed = urlparse(self.path)
@@ -124,11 +135,52 @@ class Handler(BaseHTTPRequestHandler):
             _send_json(self, j, code)
             return
 
-        # 8) Agent 执行
+        # 7.5) 多对话：列表 / 新建
+        if path == "/api/conversations":
+            if method == "GET":
+                _send_json(self, {"conversations": store.list_conversations()})
+                return
+            if method == "POST":
+                body = _read_body(self)
+                conv = store.new_conversation(body.get("title") or "新对话")
+                _send_json(self, {"conversation": conv})
+                return
+
+        # 7.6) 多对话：详情 / 删除
+        if path.startswith("/api/conversations/"):
+            cid = path[len("/api/conversations/"):]
+            if method == "GET":
+                conv = store.get_conversation(cid)
+                if not conv:
+                    _send_json(self, {"error": "会话不存在"}, 404)
+                    return
+                _send_json(self, {"conversation": conv})
+                return
+            if method == "DELETE":
+                ok = store.delete_conversation(cid)
+                _send_json(self, {"ok": ok})
+                return
+
+        # 8) Agent 执行（带会话持久化）
         if method == "POST" and path == "/api/agent":
             body = _read_body(self)
-            steps = agent.run_agent(body.get("task", ""))
-            _send_json(self, {"steps": steps})
+            task = (body.get("task", "") or "").strip()
+            if not task:
+                _send_json(self, {"error": "任务为空"}, 400)
+                return
+            cid = body.get("conversation_id") or ""
+            conv = store.get_conversation(cid) if cid else None
+            if not conv:
+                conv = store.new_conversation()
+                cid = conv["id"]
+            store.append_message(cid, "user", task)
+            try:
+                steps = agent.run_agent(task)
+            except Exception as e:
+                steps = [{"type": "error", "text": f"Agent 执行异常：{e}"}]
+            conv = store.append_message(cid, "assistant", _agent_summary(steps), steps)
+            _send_json(self, {"conversation_id": cid, "steps": steps,
+                              "messages": conv["messages"]})
             return
 
         self.send_error(404)
@@ -140,6 +192,12 @@ class Handler(BaseHTTPRequestHandler):
             _send_json(self, {"error": str(e)}, 500)
 
     def do_POST(self):
+        try:
+            self._dispatch()
+        except Exception as e:
+            _send_json(self, {"error": str(e)}, 500)
+
+    def do_DELETE(self):
         try:
             self._dispatch()
         except Exception as e:

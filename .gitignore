@@ -13,6 +13,8 @@ agent_workspace/
 
 # ===== 密钥 / 用户配置（含真实 token，严禁提交） =====
 tokens.json
+# 多对话历史（本机数据，严禁提交）
+conversations.json
 
 # ===== WorkBuddy 项目记忆（含会话与敏感数据） =====
 .workbuddy/

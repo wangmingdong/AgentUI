@@ -135,11 +135,16 @@ class Handler(BaseHTTPRequestHandler):
             ws = qs.get("ws", [""])[0]
             name = qs.get("name", [""])[0]
             if not store.is_valid_workspace(ws):
+                print(f"[file] 403 workspace not in whitelist: {ws}")
                 self.send_error(403)
                 return
             base = os.path.realpath(ws)
             target = os.path.realpath(os.path.join(base, name))
-            if target != base and not target.startswith(base + os.sep):
+            # Windows 下用 normcase 做大小写不敏感的安全边界检查
+            base_n = os.path.normcase(base)
+            target_n = os.path.normcase(target)
+            if target_n != base_n and not target_n.startswith(base_n + os.sep):
+                print(f"[file] 403 path escape: base={base} name={name} target={target}")
                 self.send_error(403)
                 return
             if not os.path.isfile(target):

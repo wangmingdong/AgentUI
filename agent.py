@@ -25,6 +25,7 @@ import subprocess
 
 from store import WORKSPACE_DIR, get_defaults, is_valid_workspace
 from gateway import chat_completion
+from catalog import PROVIDERS
 
 MAX_ITER = 12
 CMD_TIMEOUT = 60
@@ -178,6 +179,21 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
 
     steps = []
     default_provider, default_model = get_defaults()
+
+    # 视觉模式检查：当前模型必须在该平台的 vision_models 列表里
+    if vision_mode and images:
+        info = PROVIDERS.get(default_provider, {})
+        vision_models = info.get("vision_models") or []
+        if vision_models and default_model not in vision_models:
+            steps.append({
+                "type": "error",
+                "text": (
+                    f"当前默认模型「{default_model}」不支持图片输入。"
+                    f"请在设置页换一个支持视觉的模型（如 {', '.join(vision_models)}），"
+                    f"或取消勾选「视觉输入」让 Agent 把图片当文件处理。"
+                ),
+            })
+            return steps
 
     for i in range(MAX_ITER):
         payload = {

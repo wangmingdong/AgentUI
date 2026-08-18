@@ -447,6 +447,24 @@ async function runAgent() {
   const input = $("#taskInput");
   const task = input.value.trim();
   if (!task && pendingImages.length === 0) return;
+
+  // 视觉输入兼容性检查：勾选视觉输入且上传了图片时，当前默认模型必须支持看图
+  if (pendingImages.length && $("#visionChk").checked) {
+    const val = $("#modelSelect").value || "";
+    const head = val.split("/")[0];
+    const modelId = val.slice(head.length + 1);
+    const prov = (window.__PROVIDERS__ || []).find((p) => (p.prefix || p.key) === head);
+    const visionModels = prov ? (prov.vision_models || []) : [];
+    if (visionModels.length && !visionModels.includes(modelId)) {
+      alert(
+        `当前默认模型「${modelId}」不支持图片输入。\n` +
+        `请先在「设置 / Token」页换成支持视觉的模型（如 ${visionModels.join("、")}），\n` +
+        `或取消勾选「视觉输入」让 Agent 把图片当文件处理。`
+      );
+      return;
+    }
+  }
+
   const status = $("#agentStatus");
 
   setRunning(true);

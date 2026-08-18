@@ -26,8 +26,8 @@ _state = None  # 内存缓存
 def _default_state():
     return {
         "tokens": {},          # {provider_key: {"api_key": "..."}}
-        "default_provider": "opencode_zen",
-        "default_model": "deepseek-v4-flash-free",   # 默认走匿名 Zen，零门槛
+        "default_provider": "sensenova",
+        "default_model": "sensenova-6.8-flash-lite",   # 商汤 6.8 flash lite 免费且唯一支持看图
         "usage": {},           # {provider_key: {"calls": n, "tokens": n}}
         "user_workspaces": [], # 用户额外添加的工作目录（绝对路径）
     }

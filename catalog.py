@@ -63,20 +63,27 @@ PROVIDERS = {
         "free": True,
         "free_models": [
             # 以下模型经 build.nvidia.com 验证 Free Endpoint = Available（2026-08-18）
-            "z-ai/glm5.2",
-            "nvidia/nemotron-3-ultra-550b-a55b",
-            "minimaxai/minimax-m3",
-            "stepfun-ai/step-3.7-flash",
+            "z-ai/glm-5.2",                          # 纯文本，支持工具调用
+            "nvidia/nemotron-3-ultra-550b-a55b",       # 纯文本，支持工具调用
+            "minimaxai/minimax-m3",                  # 多模态，支持工具调用
+            "stepfun-ai/step-3.7-flash",             # 多模态，支持工具调用
             # 已Deprecated/下线的免费模型（保留注释备忘）：
             # "deepseek-ai/deepseek-v4-flash" -> Free Endpoint Deprecated，调用会 410 Gone
+            # "deepseek-ai/deepseek-v4-pro"   -> 发现页 featured 但 Free Endpoint Deprecated
             # "qwen/qwen3.5-122b-a10b"        -> Free Endpoint Deprecated
             # "stepfun-ai/step-3.5-flash"     -> Free Endpoint Deprecated
             # "moonshotai/kimi-k2.6"          -> 页面 404，正确名可能是 moonshotai/kimi-k2-instruct
         ],
-        "rate_limit": "40 RPM",
+        "vision_models": [
+            "minimaxai/minimax-m3",
+            "stepfun-ai/step-3.7-flash",
+            "thinkingmachines/inkling",  # 发现页 featured，Free Available，但 Function Calling Not supported；纯看图可用
+        ],
+        "rate_limit": "40 RPM（各模型共享）",
         "note": "注册 NVIDIA 开发者账号拿 Key。官网发现页（查当前可用免费模型）：https://build.nvidia.com/explore/discover 。"
-              "注意：base_url 必须是 integrate.api.nvidia.com/v1 才能调用。若测连通返回 410 Gone，通常表示该模型 Free Endpoint 已被弃用，"
-              "请去 discover 页确认最新可用免费模型列表；不是 base_url 错误。",
+              "注意：base_url 必须是 integrate.api.nvidia.com/v1；模型 ID 必须和官网代码示例里完全一致（区分大小写、横杠、作者前缀）。"
+              "发现页 featured 的 deepseek-v4-pro 实际 Free Endpoint 已 Deprecated，调用会 400/410，请勿放入免费列表。"
+              "若测连通返回 400，通常是模型 ID 不存在或请求参数不兼容；410 表示 Free Endpoint 已被弃用。",
     },
     "zhipu": {
         "name": "智谱 Zhipu / BigModel",
@@ -118,10 +125,12 @@ PROVIDERS = {
         "requires_key": True,
         "free": True,
         "free_models": [
-            "minimaxai/minimax-m3",
+            "minimaxai/minimax-m3",  # NVIDIA NIM Free Endpoint Available，多模态+工具调用
         ],
+        "vision_models": ["minimaxai/minimax-m3"],
         "rate_limit": "随 NVIDIA NIM 40 RPM",
-        "note": "MiniMax 官方也开放 API，但免费额度需申请；最省事是走 NVIDIA NIM 的 minimaxai/minimax-m3 免费模型（同一个 NIM Key）。",
+        "note": "MiniMax 官方也开放 API，但免费额度需申请；最省事是走 NVIDIA NIM 的 minimaxai/minimax-m3 免费模型（同一个 NIM Key）。"
+              "注意：模型 ID 必须和 NVIDIA 官网示例完全一致。",
     },
     "stepfun": {
         "name": "阶跃星辰 StepFun（经 NVIDIA NIM 免费）",
@@ -132,11 +141,13 @@ PROVIDERS = {
         "requires_key": True,
         "free": True,
         "free_models": [
-            "stepfun-ai/step-3.7-flash",
+            "stepfun-ai/step-3.7-flash",  # NVIDIA NIM Free Endpoint Available，多模态+工具调用
             # "stepfun-ai/step-3.5-flash" -> Free Endpoint Deprecated
         ],
+        "vision_models": ["stepfun-ai/step-3.7-flash"],
         "rate_limit": "随 NVIDIA NIM 40 RPM",
-        "note": "阶跃官方也开放平台；免费路径走 NVIDIA NIM 的 stepfun-ai/step-3.x-flash（同一个 NIM Key）。也可走 OpenRouter/Kilo 免费档。",
+        "note": "阶跃官方也开放平台；免费路径走 NVIDIA NIM 的 stepfun-ai/step-3.7-flash（同一个 NIM Key）。也可走 OpenRouter/Kilo 免费档。"
+              "注意：模型 ID 必须和 NVIDIA 官网示例完全一致。",
     },
     "openrouter": {
         "name": "OpenRouter（聚合）",

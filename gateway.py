@@ -167,6 +167,12 @@ def test_connection(provider_key: str):
             last_err = f"模型 {model_id} 返回 {code}: {err}"
             if code == 410:
                 last_err += "；该模型免费端点可能已弃用，将尝试下一个候选模型"
+            elif code == 400:
+                last_err += (
+                    "；通常是模型 ID 不存在或请求参数不兼容。"
+                    "请检查模型名是否和官网代码示例完全一致（区分大小写、横杠、作者前缀），"
+                    "并确认该模型 Free Endpoint 未下线。"
+                )
         except Exception as e:
             last_err = f"模型 {model_id} 请求异常: {e}"
 

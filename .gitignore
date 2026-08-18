@@ -15,6 +15,7 @@ uploads/
 # ===== 本地冒烟测试脚本（不提交） =====
 test_*.py
 smoke_*.py
+_tmp_*.py
 
 # ===== 密钥 / 用户配置（含真实 token，严禁提交） =====
 tokens.json

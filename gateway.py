@@ -115,31 +115,45 @@ def _fallback(payload: dict):
 
 
 def test_connection(provider_key: str):
-    """设置页「测连通」：用该平台的免费模型发一条极短请求。"""
+    """设置页「测连通」：遍历该平台的免费模型，返回第一个能通的。"""
     info = PROVIDERS.get(provider_key)
     if info is None:
         return False, f"未知 provider: {provider_key}"
     token = get_token(provider_key)
     if info["requires_key"] and not token:
         return False, "该平台需要 API Key，请先配置后再测"
-    model_id = (info["free_models"][0] if info["free_models"]
-                else (info.get("free_models") or ["gpt-oss-20b"])[0])
-    payload = {
-        "model": model_id,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 8,
-        "fallback": False,
-    }
-    # 直接调用转发（不走 fallback，test 需明确结果）
+
+    models = [m for m in (info.get("free_models") or []) if not m.startswith("#")]
+    if not models:
+        models = ["gpt-oss-20b"]
+
     try:
         headers = _build_headers(info, token)
     except RuntimeError as e:
         return False, str(e)
     url = info["base_url"].rstrip("/") + "/chat/completions"
-    try:
-        code, j = _do_request(url, headers, payload)
-        if code == 200:
-            return True, f"连通成功（{info['name']}，模型 {model_id}）"
-        return False, f"返回 {code}：" + json.dumps(j, ensure_ascii=False)[:300]
-    except Exception as e:
-        return False, f"请求异常: {e}"
+
+    last_err = ""
+    for model_id in models:
+        payload = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 8,
+            "fallback": False,
+        }
+        try:
+            code, j = _do_request(url, headers, payload)
+            if code == 200:
+                return True, f"连通成功（{info['name']}，模型 {model_id}）"
+            err = json.dumps(j, ensure_ascii=False)[:300]
+            last_err = f"模型 {model_id} 返回 {code}: {err}"
+            if code == 410:
+                last_err += "；该模型免费端点可能已弃用，将尝试下一个候选模型"
+        except Exception as e:
+            last_err = f"模型 {model_id} 请求异常: {e}"
+
+    # 全部失败：给出指向 discover 页的提示（对 NVIDIA NIM 等尤其有用）
+    hint = ""
+    if info.get("discover_url"):
+        hint = f"；请到官方发现页查看最新可用模型：{info['discover_url']}"
+    return False, f"所有候选模型均连通失败。{last_err}{hint}"

@@ -55,19 +55,21 @@ PROVIDERS = {
         "requires_key": True,
         "free": True,
         "free_models": [
-            "deepseek-ai/deepseek-v4-flash",
+            # 以下模型经 build.nvidia.com 验证 Free Endpoint = Available（2026-08-18）
             "z-ai/glm5.2",
-            "moonshotai/kimi-k2.6",
-            "minimaxai/minimax-m3",
-            "qwen/qwen3.5-122b-a10b",
-            "stepfun-ai/step-3.7-flash",
-            "stepfun-ai/step-3.5-flash",
             "nvidia/nemotron-3-ultra-550b-a55b",
+            "minimaxai/minimax-m3",
+            "stepfun-ai/step-3.7-flash",
+            # 已Deprecated/下线的免费模型（保留注释备忘）：
+            # "deepseek-ai/deepseek-v4-flash" -> Free Endpoint Deprecated，调用会 410 Gone
+            # "qwen/qwen3.5-122b-a10b"        -> Free Endpoint Deprecated
+            # "stepfun-ai/step-3.5-flash"     -> Free Endpoint Deprecated
+            # "moonshotai/kimi-k2.6"          -> 页面 404，正确名可能是 moonshotai/kimi-k2-instruct
         ],
         "rate_limit": "40 RPM",
-        "note": "注册 NVIDIA 开发者账号拿 Key。一个 Key 同时覆盖智谱/阶跃/MiniMax/Kimi 的免费模型，很划算。"
-              "官网发现页（找免费模型/各模型专属 endpoint）：https://build.nvidia.com/explore/discover 。"
-              "注意：base_url 必须是 integrate.api.nvidia.com/v1 才能调用，discover 页仅用于浏览，不能直接当 API 地址。",
+        "note": "注册 NVIDIA 开发者账号拿 Key。官网发现页（查当前可用免费模型）：https://build.nvidia.com/explore/discover 。"
+              "注意：base_url 必须是 integrate.api.nvidia.com/v1 才能调用。若测连通返回 410 Gone，通常表示该模型 Free Endpoint 已被弃用，"
+              "请去 discover 页确认最新可用免费模型列表；不是 base_url 错误。",
     },
     "zhipu": {
         "name": "智谱 Zhipu / BigModel",
@@ -120,7 +122,7 @@ PROVIDERS = {
         "free": True,
         "free_models": [
             "stepfun-ai/step-3.7-flash",
-            "stepfun-ai/step-3.5-flash",
+            # "stepfun-ai/step-3.5-flash" -> Free Endpoint Deprecated
         ],
         "rate_limit": "随 NVIDIA NIM 40 RPM",
         "note": "阶跃官方也开放平台；免费路径走 NVIDIA NIM 的 stepfun-ai/step-3.x-flash（同一个 NIM Key）。也可走 OpenRouter/Kilo 免费档。",

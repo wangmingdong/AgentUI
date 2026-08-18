@@ -98,20 +98,38 @@ def chat_completion(payload: dict):
 
 
 def _fallback(payload: dict):
-    """兜底到 OpenCode Zen 匿名通道（零门槛，无需任何 Key）。"""
+    """兜底到 OpenCode Zen 匿名通道（零门槛，无需任何 Key）。
+
+    依次尝试该平台全部免费模型，任一成功即用；全部失败给出清晰人话提示，
+    而不是扔一串难懂的 HTTP 报错。免费档可能被下线/限流，所以多试几个候选更稳。
+    """
     info = PROVIDERS[FALLBACK_PROVIDER]
     url = info["base_url"].rstrip("/") + "/chat/completions"
-    out = dict(payload)
-    out["model"] = FALLBACK_MODEL
-    out.pop("fallback", None)
-    try:
-        code, j = _do_request(url, _build_headers(info, ""), out)
-        if code == 200:
-            usage = j.get("usage") or {}
-            add_usage(FALLBACK_PROVIDER, int(usage.get("total_tokens", 0) or 0))
-        return code, j, FALLBACK_PROVIDER + "(fallback)"
-    except Exception as e:
-        return 502, {"error": {"message": f"兜底通道也失败: {e}"}}, FALLBACK_PROVIDER
+    candidates = [m for m in (info.get("free_models") or []) if not m.startswith("#")]
+    if FALLBACK_MODEL not in candidates:
+        candidates.insert(0, FALLBACK_MODEL)
+    errors = []
+    for mid in candidates:
+        out = dict(payload)
+        out["model"] = mid
+        out.pop("fallback", None)
+        try:
+            code, j = _do_request(url, _build_headers(info, ""), out)
+            if code == 200:
+                usage = j.get("usage") or {}
+                add_usage(FALLBACK_PROVIDER, int(usage.get("total_tokens", 0) or 0))
+                return code, j, FALLBACK_PROVIDER + "(fallback:" + mid + ")"
+            err = json.dumps(j, ensure_ascii=False)[:200]
+            errors.append(f"{mid}->{code}:{err}")
+        except Exception as e:
+            errors.append(f"{mid}->{e}")
+    return (502,
+            {"error": {"message":
+               "兜底通道（OpenCode Zen 匿名）所有免费模型均不可用。" +
+               "可能该免费档已被下线，或你当前的网络访问被限制。" +
+               "建议：在设置页选一个你已配置 token 的平台作为默认模型，或点「测连通」确认网络。" +
+               " 详情: " + " | ".join(errors)}},
+            FALLBACK_PROVIDER)
 
 
 def test_connection(provider_key: str):

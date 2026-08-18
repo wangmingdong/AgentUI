@@ -58,12 +58,26 @@ TOOL_NAMES = {"read_file", "write_file", "run_command", "list_dir"}
 
 
 def _safe_path(rel: str, base: str) -> str:
-    """把相对路径解析到 base 工作区内，越界则抛错。"""
+    """把路径解析到 base 工作区内，越界则抛错。
+
+    规则（用人话）：
+    - 相对路径：直接 join 到 base 工作区。
+    - 绝对路径：如果它落在 base 工作区之内（含工作区自身），自动 rebasing 成
+      相对路径再解析——这样模型即便传了完整绝对路径（如 E:\\workspace\\agentUI\\foo.py），
+      只要它确实在当前工作区间内，也能正常工作，不会被误判越界。
+    - 一旦解析结果逃出 base 工作区（含用 ../ 往上层跳），一律拒绝。
+    """
     rel = rel or "."
     base_real = os.path.realpath(base)
+    # 绝对路径且位于 base 之内 -> 改成相对 base 的写法，避免 os.path.join 把它当逃逸路径
+    if os.path.isabs(rel):
+        cand = os.path.realpath(rel)
+        if cand == base_real or cand.startswith(base_real + os.sep):
+            rel = os.path.relpath(cand, base_real)
     target = os.path.realpath(os.path.join(base_real, rel))
     if target != base_real and not target.startswith(base_real + os.sep):
-        raise ValueError(f"路径越界，拒绝访问：{rel}")
+        raise ValueError(
+            f"路径越界，拒绝访问：{rel}。请只使用相对于当前工作区间（{base_real}）的路径。")
     return target
 
 

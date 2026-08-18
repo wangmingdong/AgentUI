@@ -213,8 +213,15 @@ let currentWorkspace = "";   // 当前选中的工作区间绝对路径
 let pendingImages = [];      // 待上传图片 [{filename, data(base64), mime}]
 
 // ---------- 工作区间（增加/删除/切换） ----------
+const WS_KEY = "agentshell_workspace";  // localStorage 键，记住上次选的工作区间
+
 async function loadWorkspaces() {
   const r = await fetch("/api/workspaces").then((x) => x.json());
+  // 恢复上次选择（刷新页面不再退回默认空沙箱）
+  const saved = localStorage.getItem(WS_KEY) || "";
+  if (saved && (r.workspaces || []).includes(saved)) {
+    currentWorkspace = saved;
+  }
   const sel = $("#wsSelect");
   sel.innerHTML = "";
   (r.workspaces || []).forEach((p) => {
@@ -464,7 +471,7 @@ async function runAgent() {
       return;
     }
     currentConvId = r.conversation_id;
-    if (r.workspace) currentWorkspace = r.workspace;
+    if (r.workspace) applyWorkspace(r.workspace);
     input.value = "";
     pendingImages = [];
     renderImgPreview();
@@ -497,23 +504,52 @@ $("#newConv").addEventListener("click", async () => {
 // ---------- 工作区间：添加/删除/切换 ----------
 $("#wsSelect").addEventListener("change", () => {
   currentWorkspace = $("#wsSelect").value;
+  localStorage.setItem(WS_KEY, currentWorkspace);
   updateVisionHint();
 });
+
+function applyWorkspace(path) {
+  currentWorkspace = path;
+  localStorage.setItem(WS_KEY, path);
+  const sel = $("#wsSelect");
+  if (sel) sel.value = path;
+  updateVisionHint();
+}
 
 $("#wsAdd").addEventListener("click", async () => {
   const p = prompt("输入要添加的工作目录绝对路径（Agent 将可在此目录内读写/执行）：");
   if (!p) return;
+  await _addWorkspace(p.trim());
+});
+
+// 一键把本工具所在项目目录（E:\workspace\agentUI 之类）加入工作区间
+$("#wsAddApp").addEventListener("click", async () => {
+  const r = await fetch("/api/workspaces").then((x) => x.json());
+  if (!r.app_dir) return;
+  if ((r.workspaces || []).includes(r.app_dir)) {
+    applyWorkspace(r.app_dir);
+    const hint = $("#wsHint");
+    hint.textContent = "✓ 本项目目录已在列表中，已切换过去";
+    hint.className = "ws-hint ok";
+    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
+    return;
+  }
+  await _addWorkspace(r.app_dir);
+});
+
+async function _addWorkspace(p) {
   const hint = $("#wsHint");
   try {
     const r = await fetch("/api/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: p.trim() }),
+      body: JSON.stringify({ path: p }),
     }).then((x) => x.json());
     if (r.ok) {
       hint.textContent = "✓ " + r.message;
       hint.className = "ws-hint ok";
       await loadWorkspaces();
+      applyWorkspace(p);  // 加完直接切过去，省一步
     } else {
       hint.textContent = "✗ " + r.message;
       hint.className = "ws-hint fail";
@@ -524,7 +560,7 @@ $("#wsAdd").addEventListener("click", async () => {
   } finally {
     setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
   }
-});
+}
 
 $("#wsDel").addEventListener("click", async () => {
   const p = $("#wsSelect").value;

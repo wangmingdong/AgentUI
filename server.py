@@ -185,7 +185,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/workspaces":
             if method == "GET":
                 _send_json(self, {"workspaces": store.get_workspaces(),
-                                  "default": store.WORKSPACE_DIR})
+                                  "default": store.WORKSPACE_DIR,
+                                  "app_dir": BASE_DIR})  # 一键把本工具所在项目目录加入工作区间
                 return
             if method == "POST":
                 body = _read_body(self)

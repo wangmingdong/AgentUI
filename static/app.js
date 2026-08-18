@@ -60,15 +60,18 @@ function renderProviders(providers) {
     const tags =
       (p.free ? '<span class="tag free">免费</span>' : '<span class="tag paid">付费</span>') +
       (p.requires_key ? "" : '<span class="tag noreq">免Key</span>');
-    const discovery = p.discover_url
-      ? `<div class="meta"><a href="${p.discover_url}" target="_blank" rel="noopener">🔗 官方发现页</a></div>`
-      : "";
+    // 访问入口页（申请/管理 Token）+ 官方发现页（仅 NVIDIA 系有）
+    const links = [
+      p.console_url ? `<a class="portal-link" href="${p.console_url}" target="_blank" rel="noopener">🔗 访问入口页（申请 / 管理 Token）</a>` : "",
+      p.discover_url ? `<a class="portal-link" href="${p.discover_url}" target="_blank" rel="noopener">🧭 官方发现页</a>` : "",
+    ].filter(Boolean).join("");
+    const portal = links ? `<div class="portal">${links}</div>` : "";
     card.innerHTML = `
       <h3>${p.name} ${tags}</h3>
       <div class="meta">${p.base_url}</div>
       <div class="meta">限速：${p.rate_limit}</div>
       <div class="models">免费模型：${(p.free_models || []).join("、") || "—"}</div>
-      ${discovery}
+      ${portal}
       <div class="meta note">${p.note}</div>
       <input type="password" class="tok" placeholder="API Key（${p.has_token ? "已配置" : "未配置"}）" />
       <div class="usage">

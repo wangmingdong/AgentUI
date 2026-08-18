@@ -20,6 +20,7 @@ OpenCode Zen：连 key 都不用（匿名按 IP 限速）就能调。
 PROVIDERS = {
     "opencode_zen": {
         "name": "OpenCode Zen",
+        "console_url": "https://opencode.ai/",
         "base_url": "https://opencode.ai/zen/v1",
         "auth": "bearer_or_anonymous",   # 有 key 用 Bearer；没 key 匿名也能调
         "requires_key": False,
@@ -35,6 +36,7 @@ PROVIDERS = {
     },
     "sensenova": {
         "name": "商汤 SenseNova",
+        "console_url": "https://www.sensenova.cn/",
         "base_url": "https://token.sensenova.cn/v1",
         "auth": "bearer",
         "requires_key": True,
@@ -49,6 +51,7 @@ PROVIDERS = {
     },
     "nvidia_nim": {
         "name": "英伟达 NVIDIA NIM",
+        "console_url": "https://build.nvidia.com/",
         "base_url": "https://integrate.api.nvidia.com/v1",
         "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
@@ -73,6 +76,7 @@ PROVIDERS = {
     },
     "zhipu": {
         "name": "智谱 Zhipu / BigModel",
+        "console_url": "https://open.bigmodel.cn/",
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
         "auth": "bearer",
         "requires_key": True,
@@ -87,6 +91,7 @@ PROVIDERS = {
     },
     "aliyun_bailian": {
         "name": "阿里云百炼 DashScope",
+        "console_url": "https://bailian.console.aliyun.com/",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "auth": "bearer",
         "requires_key": True,
@@ -102,6 +107,7 @@ PROVIDERS = {
     },
     "minimax": {
         "name": "MiniMax（经 NVIDIA NIM 免费）",
+        "console_url": "https://www.minimaxi.com/",
         "base_url": "https://integrate.api.nvidia.com/v1",
         "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
@@ -115,6 +121,7 @@ PROVIDERS = {
     },
     "stepfun": {
         "name": "阶跃星辰 StepFun（经 NVIDIA NIM 免费）",
+        "console_url": "https://www.stepfun.com/",
         "base_url": "https://integrate.api.nvidia.com/v1",
         "discover_url": "https://build.nvidia.com/explore/discover",
         "auth": "bearer",
@@ -129,6 +136,7 @@ PROVIDERS = {
     },
     "openrouter": {
         "name": "OpenRouter（聚合）",
+        "console_url": "https://openrouter.ai/keys",
         "base_url": "https://openrouter.ai/api/v1",
         "auth": "bearer",
         "requires_key": True,
@@ -145,6 +153,7 @@ PROVIDERS = {
     },
     "siliconflow": {
         "name": "硅基流动 SiliconFlow（聚合）",
+        "console_url": "https://cloud.siliconflow.cn/",
         "base_url": "https://api.siliconflow.cn/v1",
         "auth": "bearer",
         "requires_key": True,
@@ -160,6 +169,7 @@ PROVIDERS = {
     },
     "modelscope": {
         "name": "ModelScope 魔搭（聚合）",
+        "console_url": "https://modelscope.cn/my/myaccesstoken",
         "base_url": "https://api-inference.modelscope.cn/v1/",
         "auth": "bearer",
         "requires_key": True,
@@ -237,6 +247,7 @@ def list_providers(config_tokens: dict) -> list:
             "has_token": has_key,
             "base_url": p["base_url"],
             "discover_url": p.get("discover_url", ""),
+            "console_url": p.get("console_url", ""),
             "quota_hint": QUOTA_HINT.get(key, 0),
             "auth": p["auth"],
             "prefix": prefix_of(key),

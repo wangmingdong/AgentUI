@@ -190,6 +190,14 @@ body {
 
 /* 步骤卡片 */
 .step-list { display: flex; flex-direction: column; gap: 10px; }
+.step-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 11px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--muted); font-size: 12px; cursor: pointer; transition: .12s;
+}
+.step-toggle:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+.steps { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+.steps.hidden { display: none; }
 .step-card {
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
   padding: 10px 12px; font-size: 12.5px; box-shadow: var(--shadow);
@@ -209,11 +217,12 @@ body {
 /* Token 状态 */
 .token-status { display: flex; flex-direction: column; gap: 8px; }
 .token-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); font-size: 12.5px;
+  display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 8px;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); font-size: 12.5px;
 }
-.token-row .tr-name { font-weight: 600; }
-.token-row .tr-state { font-size: 11px; padding: 1px 8px; border-radius: 999px; }
+.token-row .tr-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.token-row .tr-state { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.token-row .tr-res { min-width: 0; color: var(--muted); font-size: 11.5px; }
 .tr-state.configured { background: var(--green-soft); color: var(--green); }
 .tr-state.empty { background: var(--surface-3); color: var(--muted); }
 

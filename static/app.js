@@ -309,8 +309,10 @@ function renderTokenStatus() {
     btn.className = "btn small";
     btn.textContent = "测连通";
     const res = document.createElement("span");
-    res.className = "ws-hint";
-    res.style.marginLeft = "8px";
+    res.className = "ws-hint tr-res";
+    res.style.minWidth = "0";
+    res.style.overflow = "hidden";
+    res.style.textOverflow = "ellipsis";
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       res.textContent = "测试中…";

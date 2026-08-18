@@ -25,6 +25,8 @@ FALLBACK_MODEL = "deepseek-v4-flash-free"
 
 
 def _do_request(url: str, headers: dict, body: dict):
+    body = dict(body)
+    body.pop("fallback", None)  # fallback 是网关内部标记，不能传给上游
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:

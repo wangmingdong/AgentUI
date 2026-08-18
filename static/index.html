@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AgentShell · 多平台 Agent 壳子</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="stylesheet" href="/static/vendor/github.min.css" />
+  <link rel="stylesheet" href="/static/vendor/github.min.css" id="hljsLight" />
+  <link rel="stylesheet" href="/static/vendor/github-dark.min.css" id="hljsDark" disabled />
 </head>
 <body>
   <div class="app">
@@ -38,6 +39,8 @@
           <span id="wsHint" class="ws-hint"></span>
         </div>
         <div class="top-actions">
+          <button id="themeToggle" class="btn small" title="切换深色 / 浅色">🌙 深色</button>
+          <button id="exportConv" class="btn small" title="导出当前对话为 Markdown">⬇ 导出</button>
           <button id="openSettings" class="btn small">⚙ 设置 / Token</button>
         </div>
       </header>

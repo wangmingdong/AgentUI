@@ -84,25 +84,56 @@ function highlightWithin(root) {
     } catch (e) {}
   });
   $$("pre", root).forEach((pre) => {
-    if (pre.querySelector(".copy-btn")) return;
-    const btn = document.createElement("button");
-    btn.className = "copy-btn";
-    btn.textContent = "复制";
-    btn.addEventListener("click", () => {
+    if (pre.querySelector(".code-actions")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "code-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "复制";
+    copyBtn.addEventListener("click", () => {
       const code = pre.querySelector("code");
       const txt = code ? code.innerText : pre.innerText;
       navigator.clipboard.writeText(txt).then(() => {
-        btn.textContent = "已复制";
-        setTimeout(() => (btn.textContent = "复制"), 1200);
+        copyBtn.textContent = "已复制";
+        setTimeout(() => (copyBtn.textContent = "复制"), 1200);
       });
     });
-    pre.appendChild(btn);
+    const wBtn = document.createElement("button");
+    wBtn.className = "write-file-btn";
+    wBtn.textContent = "写入文件";
+    wBtn.addEventListener("click", () => writeCodeToFile(pre, wBtn));
+    wrap.appendChild(copyBtn);
+    wrap.appendChild(wBtn);
+    pre.appendChild(wrap);
   });
+}
+async function writeCodeToFile(pre, btn) {
+  const code = pre.querySelector("code");
+  const txt = code ? code.innerText : pre.innerText;
+  const name = prompt("保存为文件名（相对当前工作区间，如 src/app.py）：");
+  if (!name) return;
+  btn.disabled = true;
+  btn.textContent = "写入中…";
+  try {
+    const r = await postJson("/api/write-file", {
+      workspace: state.currentWorkspace,
+      path: name,
+      content: txt,
+    });
+    btn.textContent = r.ok ? "✓ 已写入" : "✗ " + (r.message || "失败");
+  } catch (e) {
+    btn.textContent = "✗ 出错";
+  }
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = "写入文件";
+  }, 2000);
 }
 
 /* ---------- 初始化 ---------- */
 async function init() {
   bindEvents();
+  initTheme();
   await loadProviders();
   await loadConfig();
   await loadWorkspaces();
@@ -110,6 +141,46 @@ async function init() {
   if (state.currentWorkspace) loadFileTree(state.currentWorkspace, "");
   renderTokenStatus();
   updateVisionHint();
+}
+
+/* ---------- 主题（深色 / 浅色 / 跟随系统） ---------- */
+function initTheme() {
+  let t = localStorage.getItem("as-theme");
+  if (!t) {
+    t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
+  applyTheme(t);
+}
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  const dark = t === "dark";
+  const d = $("#hljsDark"), l = $("#hljsLight");
+  if (d) d.disabled = !dark;
+  if (l) l.disabled = dark;
+  const btn = $("#themeToggle");
+  if (btn) btn.textContent = dark ? "☀️ 浅色" : "🌙 深色";
+  localStorage.setItem("as-theme", t);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme") || "light";
+  applyTheme(cur === "dark" ? "light" : "dark");
+}
+
+/* ---------- 导出当前对话为 Markdown ---------- */
+async function exportCurrentConv() {
+  if (!state.currentConvId) { alert("当前没有可导出的对话"); return; }
+  const conv = await fetchJson(API.conv(state.currentConvId));
+  const c = conv.conversation;
+  let md = `# ${c.title || "对话"}\n\n`;
+  (c.messages || []).forEach((m) => {
+    md += `## ${m.role === "user" ? "你" : "Agent"}\n\n${m.content || ""}\n\n`;
+  });
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (c.title || "conversation").replace(/[\\/:*?"<>|]/g, "_") + ".md";
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function bindEvents() {
@@ -130,6 +201,8 @@ function bindEvents() {
   $("#openSettings").addEventListener("click", () => ($("#settingsModal").hidden = false));
   $("#closeSettings").addEventListener("click", () => ($("#settingsModal").hidden = true));
   $("#settingsMask").addEventListener("click", () => ($("#settingsModal").hidden = true));
+  $("#themeToggle").addEventListener("click", toggleTheme);
+  $("#exportConv").addEventListener("click", exportCurrentConv);
   // 工作区间
   $("#wsAdd").addEventListener("click", () => {
     const p = prompt("输入要添加的项目目录绝对路径：");
@@ -365,6 +438,17 @@ async function loadConversations() {
   const data = await fetchJson(API.conversations);
   renderConvList(data.conversations || []);
 }
+function dayGroup(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const now = new Date();
+  const sod = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const diff = Math.round((sod(now) - sod(d)) / 86400000);
+  if (diff <= 0) return "今天";
+  if (diff === 1) return "昨天";
+  if (diff < 7) return "近 7 天";
+  return "更早";
+}
+
 function renderConvList(convs) {
   const box = $("#convItems");
   box.innerHTML = "";
@@ -373,26 +457,70 @@ function renderConvList(convs) {
     return;
   }
   const q = ($("#convSearch").value || "").toLowerCase();
-  convs
-    .filter((c) => !q || (c.title || "").toLowerCase().includes(q))
-    .forEach((c) => {
-      const item = document.createElement("div");
-      item.className = "conv-item" + (c.id === state.currentConvId ? " active" : "");
-      item.innerHTML = `<span class="conv-title">${escapeHtml(c.title || "新对话")}</span>
-        <button class="conv-del" title="删除">✕</button>`;
-      item.querySelector(".conv-title").addEventListener("click", () => selectConv(c.id));
-      item.querySelector(".conv-del").addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!confirm("删除该对话？")) return;
-        await fetch(API.conv(c.id), { method: "DELETE" });
-        if (state.currentConvId === c.id) {
-          state.currentConvId = null;
-          $("#messages").innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
-        }
-        await loadConversations();
-      });
-      box.appendChild(item);
-    });
+  const filtered = convs.filter((c) => !q || (c.title || "").toLowerCase().includes(q));
+  const groups = {};
+  filtered.forEach((c) => {
+    const g = dayGroup(c.updated_at || 0);
+    (groups[g] = groups[g] || []).push(c);
+  });
+  const order = ["今天", "昨天", "近 7 天", "更早"];
+  let any = false;
+  order.forEach((g) => {
+    if (!groups[g] || !groups[g].length) return;
+    const title = document.createElement("div");
+    title.className = "conv-group-title";
+    title.textContent = g;
+    box.appendChild(title);
+    groups[g].forEach((c) => box.appendChild(renderConvItem(c)));
+    any = true;
+  });
+  if (!any) box.innerHTML = '<div class="conv-empty">没有匹配的对话</div>';
+}
+
+function renderConvItem(c) {
+  const item = document.createElement("div");
+  item.className = "conv-item" + (c.id === state.currentConvId ? " active" : "");
+  const span = document.createElement("span");
+  span.className = "conv-title";
+  span.textContent = c.title || "新对话";
+  item.appendChild(span);
+  const del = document.createElement("button");
+  del.className = "conv-del";
+  del.title = "删除";
+  del.textContent = "✕";
+  item.appendChild(del);
+  span.addEventListener("click", () => selectConv(c.id));
+  span.addEventListener("dblclick", () => startRename(c, span, item));
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm("删除该对话？")) return;
+    await fetch(API.conv(c.id), { method: "DELETE" });
+    if (state.currentConvId === c.id) {
+      state.currentConvId = null;
+      $("#messages").innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
+    }
+    await loadConversations();
+  });
+  return item;
+}
+
+function startRename(c, span, item) {
+  const input = document.createElement("input");
+  input.className = "conv-title-input";
+  input.value = c.title || "新对话";
+  item.replaceChild(input, span);
+  input.focus();
+  input.select();
+  const commit = async () => {
+    const v = input.value.trim() || "新对话";
+    await postJson("/api/conversation/rename", { id: c.id, title: v });
+    await loadConversations();
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+    else if (e.key === "Escape") loadConversations();
+  });
 }
 function filterConvs() {
   loadConversations();
@@ -418,10 +546,10 @@ function renderMessages(messages) {
     box.innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
     return;
   }
-  messages.forEach((m) => box.appendChild(renderMessage(m)));
+  messages.forEach((m, i) => box.appendChild(renderMessage(m, i)));
   box.scrollTop = box.scrollHeight;
 }
-function renderMessage(m) {
+function renderMessage(m, idx) {
   const row = document.createElement("div");
   row.className = "msg-row " + (m.role === "user" ? "msg-user" : "msg-bot");
   const bubble = document.createElement("div");
@@ -448,12 +576,47 @@ function renderMessage(m) {
     if (m.steps && m.steps.length) bubble.appendChild(renderSteps(m.steps));
   }
   row.appendChild(bubble);
+  if (idx != null) row.appendChild(buildMsgActions(m, idx));
   const meta = document.createElement("div");
   meta.className = "msg-meta";
   meta.textContent = fmtTime(m.ts) + (m.role === "user" ? "" : " · Agent");
   row.appendChild(meta);
   return row;
 }
+
+function buildMsgActions(m, idx) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "mabtn";
+  copyBtn.textContent = "复制";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(m.content || "").then(() => {
+      copyBtn.textContent = "已复制";
+      setTimeout(() => (copyBtn.textContent = "复制"), 1200);
+    });
+  });
+  wrap.appendChild(copyBtn);
+  if (m.role === "assistant") {
+    const reg = document.createElement("button");
+    reg.className = "mabtn";
+    reg.textContent = "重生成";
+    reg.addEventListener("click", () => regenerate());
+    wrap.appendChild(reg);
+  }
+  const del = document.createElement("button");
+  del.className = "mabtn danger";
+  del.textContent = "删除";
+  del.addEventListener("click", async () => {
+    if (!confirm("删除这条消息？")) return;
+    await postJson("/api/message/delete", { conversation_id: state.currentConvId, index: idx });
+    const conv = await fetchJson(API.conv(state.currentConvId));
+    renderMessages(conv.conversation.messages || []);
+  });
+  wrap.appendChild(del);
+  return wrap;
+}
+
 function renderSteps(steps) {
   const wrap = document.createElement("div");
   wrap.style.marginTop = "8px";
@@ -549,30 +712,8 @@ function setRunning(r) {
 function stopAgent() {
   if (state.abort) state.abort.abort();
 }
-async function runAgent() {
-  if (state.running) return;
-  const raw = $("#taskInput").value.trim();
-  if (!raw) return;
-  const files = extractMentions(raw);
-  const task = raw.replace(/@[^\s@]+/g, "").replace(/\s+/g, " ").trim();
-  if (!task && !files.length && !state.images.length) return;
-
-  appendLocalUser(task, state.images);
-  const a = appendLocalAssistant();
-  state.toolCards = [];
-  $("#stepList").innerHTML = "";
-  switchCtx("steps");
-  setRunning(true);
+async function streamAgent(body, a) {
   state.abort = new AbortController();
-
-  const body = {
-    task,
-    workspace: state.currentWorkspace,
-    vision_mode: $("#visionChk").checked,
-    files,
-    images: state.images,
-    conversation_id: state.currentConvId || "",
-  };
   try {
     const resp = await fetch(API.agentStream, {
       method: "POST",
@@ -613,10 +754,57 @@ async function runAgent() {
     }
   } finally {
     a.cursor.remove();
-    setRunning(false);
-    state.images = [];
-    renderImgPreview();
   }
+}
+
+async function runAgent() {
+  if (state.running) return;
+  const raw = $("#taskInput").value.trim();
+  if (!raw) return;
+  const files = extractMentions(raw);
+  const task = raw.replace(/@[^\s@]+/g, "").replace(/\s+/g, " ").trim();
+  if (!task && !files.length && !state.images.length) return;
+
+  appendLocalUser(task, state.images);
+  const a = appendLocalAssistant();
+  state.toolCards = [];
+  $("#stepList").innerHTML = "";
+  switchCtx("steps");
+  setRunning(true);
+  const body = {
+    task,
+    workspace: state.currentWorkspace,
+    vision_mode: $("#visionChk").checked,
+    files,
+    images: state.images,
+    conversation_id: state.currentConvId || "",
+  };
+  await streamAgent(body, a);
+  setRunning(false);
+  state.images = [];
+  renderImgPreview();
+}
+
+async function regenerate() {
+  if (state.running || !state.currentConvId) return;
+  const a = appendLocalAssistant();
+  state.toolCards = [];
+  $("#stepList").innerHTML = "";
+  switchCtx("steps");
+  setRunning(true);
+  const body = {
+    task: "",
+    workspace: state.currentWorkspace,
+    vision_mode: $("#visionChk").checked,
+    files: [],
+    images: [],
+    conversation_id: state.currentConvId,
+    regenerate: true,
+  };
+  await streamAgent(body, a);
+  setRunning(false);
+  state.images = [];
+  renderImgPreview();
 }
 function handleEvent(ev, a) {
   switch (ev.event) {

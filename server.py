@@ -311,6 +311,43 @@ class Handler(BaseHTTPRequestHandler):
                 _send_json(self, {"ok": ok})
                 return
 
+        # 7.6.1) 对话重命名 / 删除某条消息
+        if method == "POST" and path == "/api/conversation/rename":
+            body = _read_body(self)
+            ok = store.rename_conversation(body.get("id", ""), body.get("title", ""))
+            _send_json(self, {"ok": ok})
+            return
+        if method == "POST" and path == "/api/message/delete":
+            body = _read_body(self)
+            try:
+                idx = int(body.get("index", -1))
+            except Exception:
+                idx = -1
+            ok = store.delete_message(body.get("conversation_id", ""), idx)
+            _send_json(self, {"ok": ok})
+            return
+
+        # 7.6.2) 一键把代码写入工作区文件（安全锁 workspace 内）
+        if method == "POST" and path == "/api/write-file":
+            body = _read_body(self)
+            ws = body.get("workspace") or ""
+            if not store.is_valid_workspace(ws):
+                _send_json(self, {"ok": False, "message": "工作区间不在白名单"}, 400)
+                return
+            rel = body.get("path", "")
+            content = body.get("content", "")
+            try:
+                target = agent._safe_path(rel, ws)
+                os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(content)
+                _send_json(self, {"ok": True, "message": f"已写入 {rel}"})
+            except ValueError as e:
+                _send_json(self, {"ok": False, "message": str(e)}, 400)
+            except Exception as e:
+                _send_json(self, {"ok": False, "message": str(e)}, 500)
+            return
+
         # 7.7) 安全工作区文件树（供右栏文件树 / @引用自动补全）
         if method == "GET" and path == "/api/fs/list":
             qs = parse_qs(parsed.query)
@@ -340,13 +377,24 @@ class Handler(BaseHTTPRequestHandler):
                     si = _save_image(ws, im.get("filename", "image.png"), im["data"])
                     si["data"] = im["data"]
                     saved_images.append(si)
+            regenerate = bool(body.get("regenerate"))
             cid = body.get("conversation_id") or ""
             conv = store.get_conversation(cid) if cid else None
-            if not conv:
-                conv = store.new_conversation()
-                cid = conv["id"]
-            attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
-            store.append_message(cid, "user", task, attachments=attachments)
+            if regenerate:
+                if not conv:
+                    _send_json(self, {"error": "无法重生成：会话不存在"}, 400)
+                    return
+                last_user = store.delete_last_assistant(cid)
+                if last_user:
+                    task = last_user
+                saved_images = []
+                attachments = []
+            else:
+                if not conv:
+                    conv = store.new_conversation()
+                    cid = conv["id"]
+                attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
+                store.append_message(cid, "user", task, attachments=attachments)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")

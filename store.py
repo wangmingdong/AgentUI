@@ -248,3 +248,52 @@ def append_message(cid, role, content, steps=None, attachments=None):
     save_conversations()
     return c
 
+
+def rename_conversation(cid, title):
+    """重命名对话标题。"""
+    s = load_conversations()
+    c = s["conversations"].get(cid)
+    if not c:
+        return False
+    c["title"] = (title or "新对话").strip()[:60]
+    c["updated_at"] = time.time()
+    save_conversations()
+    return True
+
+
+def delete_message(cid, idx):
+    """删除对话中第 idx 条消息（按当前顺序）。"""
+    s = load_conversations()
+    c = s["conversations"].get(cid)
+    if not c:
+        return False
+    msgs = c.get("messages", [])
+    if 0 <= idx < len(msgs):
+        msgs.pop(idx)
+        c["updated_at"] = time.time()
+        save_conversations()
+        return True
+    return False
+
+
+def delete_last_assistant(cid):
+    """重生成前处理：删掉对话末尾最后一条 assistant 消息，返回末尾 user 消息内容。"""
+    s = load_conversations()
+    c = s["conversations"].get(cid)
+    if not c:
+        return None
+    msgs = c.get("messages", [])
+    while msgs and msgs[-1].get("role") != "assistant":
+        msgs.pop()
+    if msgs and msgs[-1].get("role") == "assistant":
+        msgs.pop()
+    last_user = ""
+    for m in reversed(msgs):
+        if m.get("role") == "user":
+            last_user = m.get("content", "")
+            break
+    c["updated_at"] = time.time()
+    save_conversations()
+    return last_user
+
+

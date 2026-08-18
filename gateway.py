@@ -183,3 +183,132 @@ def test_connection(provider_key: str):
     if info.get("discover_url"):
         hint = f"；请到官方发现页查看最新可用模型：{info['discover_url']}"
     return False, f"所有候选模型均连通失败。{last_err}{hint}"
+
+
+def _parse_sse_line(line: str):
+    """解析一行 SSE：返回 JSON dict / 字符串 '[DONE]' / 或 None（注释/空行）。"""
+    s = line.strip()
+    if not s.startswith("data:"):
+        return None
+    data = s[len("data:"):].strip()
+    if data == "[DONE]":
+        return "[DONE]"
+    try:
+        return json.loads(data)
+    except Exception:
+        return None
+
+
+def _stream_once(url, headers, body, provider_key):
+    """对单个上游发 stream 请求，yield 文本增量(str)。
+
+    逻辑：逐块读取 chunked 响应，按行解析 SSE（data: {...} / [DONE]）；
+    若上游忽略了 stream、直接吐完整 JSON，则在流结束后整体解析并一次性 yield，
+    实现「非 SSE 降级」。用量在结束时记一次。
+    """
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        pending = ""
+        buffer = ""
+        usage = None
+        got = False
+        while True:
+            chunk = resp.read(4096)
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", "ignore")
+            buffer += text
+            pending += text
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                p = _parse_sse_line(line)
+                if p == "[DONE]":
+                    break
+                if isinstance(p, dict):
+                    d = (p.get("choices") or [{}])[0].get("delta") or {}
+                    c = d.get("content") or ""
+                    if c:
+                        got = True
+                        yield c
+                    u = p.get("usage")
+                    if u:
+                        usage = u
+        if usage:
+            add_usage(provider_key, int((usage or {}).get("total_tokens", 0) or 0))
+        # 上游没返回任何 token（可能忽略了 stream，直接吐完整 JSON）
+        if not got and buffer.strip():
+            try:
+                j = json.loads(buffer)
+                if isinstance(j, dict):
+                    c = ((j.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                    if c:
+                        add_usage(provider_key, int(((j.get("usage") or {}).get("total_tokens", 0) or 0)))
+                        yield c
+                    else:
+                        err = (j.get("error") or {}).get("message")
+                        if err:
+                            yield "[错误] " + err
+            except Exception:
+                pass
+
+
+def chat_completion_stream(payload: dict):
+    """流式版 chat_completion：yield 文本片段(str)。
+
+    路由/鉴权/fallback 复用与非流式一致；主平台失败（且允许 fallback）时
+    降级到 OpenCode Zen 匿名通道（也走 stream）。上游不支持 stream 时，
+    _stream_once 内部降级为一次性完整文本。
+    """
+    model = payload.get("model", "")
+    default_provider, _ = get_defaults()
+    provider_key, model_id, info = get_provider(model, default_provider)
+    if info is None:
+        yield f"[错误] 未知 provider: {provider_key}"
+        return
+
+    want_fallback = bool(payload.get("fallback")) and provider_key != FALLBACK_PROVIDER
+    plan = [(provider_key, model_id)]
+    if want_fallback:
+        fb_info = PROVIDERS[FALLBACK_PROVIDER]
+        fb_models = [m for m in (fb_info.get("free_models") or []) if not m.startswith("#")]
+        fb_model = FALLBACK_MODEL if FALLBACK_MODEL in fb_models else (fb_models[0] if fb_models else FALLBACK_MODEL)
+        plan.append((FALLBACK_PROVIDER, fb_model))
+
+    last_err = ""
+    for pk, mid in plan:
+        pinfo = PROVIDERS[pk]
+        token = get_token(pk)
+        try:
+            headers = _build_headers(pinfo, token)
+        except RuntimeError as e:
+            last_err = str(e)
+            if pk == provider_key:
+                yield f"[错误] {e}"
+            continue
+        url = pinfo["base_url"].rstrip("/") + "/chat/completions"
+        out = dict(payload)
+        out["model"] = mid
+        out["stream"] = True
+        out.pop("fallback", None)
+        try:
+            for piece in _stream_once(url, headers, out, pk):
+                yield piece
+            return
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", "ignore")[:300]
+            except Exception:
+                pass
+            last_err = f"{pk}->{e.code}:{err_body}"
+            if pk == provider_key:
+                yield f"[错误] 模型调用失败（{pk} {e.code}）: {err_body}"
+            continue
+        except Exception as e:
+            last_err = f"{pk}->{e}"
+            if pk == provider_key:
+                yield f"[错误] 流式请求异常: {e}"
+            continue
+
+    yield f"[错误] 流式请求失败（{last_err}）"

@@ -5,80 +5,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AgentShell · 多平台 Agent 壳子</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/vendor/github.min.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">AgentShell <span class="sub">多平台 Token 壳子 · 操作电脑写程序</span></div>
-    <nav class="tabs">
-      <button class="tab active" data-tab="settings">设置 / Token</button>
-      <button class="tab" data-tab="agent">Agent 干活</button>
-    </nav>
-  </header>
-
-  <!-- 设置页 -->
-  <section id="settings" class="panel active">
-    <div class="card">
-      <h2>默认模型</h2>
-      <p class="hint">所有聊天与 Agent 都走这里选的模型。默认是 OpenCode Zen 匿名通道，零门槛免 Key。</p>
-      <div class="row">
-        <label>模型</label>
-        <select id="modelSelect"></select>
-        <button id="saveDefault" class="btn">保存默认</button>
+  <div class="app">
+    <!-- ===== 左栏：对话 ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">AgentShell</div>
+        <div class="brand-sub">多平台 Token 壳子 · 操作电脑写程序</div>
       </div>
-      <div id="defaultMsg" class="msg"></div>
-    </div>
+      <button id="newConv" class="btn primary block">＋ 新建对话</button>
+      <div class="search-box">
+        <input id="convSearch" type="text" placeholder="搜索对话…" />
+      </div>
+      <div id="convItems" class="conv-items"></div>
+      <div class="sidebar-foot">
+        <label class="sf-label">默认模型</label>
+        <select id="modelSelect"></select>
+      </div>
+    </aside>
 
-    <div class="card">
-      <h2>平台 Token 配置</h2>
-      <p class="hint">免费平台大多填了 Key 才用「专属额度」；OpenCode Zen 不填也能匿名用。贴完点「测连通」。</p>
-      <div id="providers" class="providers"></div>
-    </div>
-
-    <div class="card">
-      <h2>用量</h2>
-      <div id="usage" class="usage"></div>
-    </div>
-  </section>
-
-  <!-- Agent 页 -->
-  <section id="agent" class="panel">
-    <div class="agent-layout">
-      <aside class="conv-side">
-        <button id="newConv" class="btn primary block">+ 新建对话</button>
-        <div id="convItems" class="conv-items"></div>
-      </aside>
-      <div class="conv-main">
+    <!-- ===== 中栏：聊天 ===== -->
+    <main class="main">
+      <header class="main-top">
         <div class="ws-bar">
-          <label>工作区间</label>
+          <span class="ws-label">工作区间</span>
           <select id="wsSelect"></select>
-          <button id="wsAdd" class="btn small">+ 添加目录</button>
-          <button id="wsAddApp" class="btn small" title="一键把本工具所在的项目目录加入工作区间">＋本项目目录</button>
-          <button id="wsDel" class="btn small danger">删除</button>
+          <button id="wsAdd" class="btn small" title="添加自定义项目目录">＋目录</button>
+          <button id="wsAddApp" class="btn small" title="一键把本工具所在项目目录加入工作区间">＋本项目</button>
+          <button id="wsDel" class="btn small danger">删</button>
           <span id="wsHint" class="ws-hint"></span>
         </div>
-        <div id="messages" class="messages">
-          <div class="empty-hint">还没有对话，点左上「+ 新建对话」开始，或直接输入任务。</div>
+        <div class="top-actions">
+          <button id="openSettings" class="btn small">⚙ 设置 / Token</button>
         </div>
-        <div class="composer">
-          <div class="composer-tools">
-            <button id="imgBtn" class="btn small" type="button">📎 图片</button>
-            <input type="file" id="imgInput" accept="image/*" multiple hidden />
-            <label class="vision-toggle" title="勾选后图片作为视觉输入直接传给支持多模态的模型">
-              <input type="checkbox" id="visionChk" checked /> 🖼 视觉输入
-            </label>
-            <span id="visionHint" class="ws-hint"></span>
+      </header>
+
+      <div id="messages" class="messages">
+        <div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-tools">
+          <button id="imgBtn" class="btn small" type="button">📎 图片</button>
+          <input type="file" id="imgInput" accept="image/*" multiple hidden />
+          <label class="vision-toggle" title="勾选后图片作为视觉输入直接传给支持多模态的模型">
+            <input type="checkbox" id="visionChk" checked /> 🖼 视觉输入
+          </label>
+          <span id="visionHint" class="ws-hint"></span>
+        </div>
+        <div id="imgPreview" class="img-preview"></div>
+        <div id="mentionBox" class="mention-box" hidden></div>
+        <textarea id="taskInput" rows="3" placeholder="描述任务，Enter 发送，Shift+Enter 换行；输入 @ 可引用工作区文件…"></textarea>
+        <div class="composer-row">
+          <button id="runAgent" class="btn primary">运行 Agent</button>
+          <button id="stopAgent" class="btn small" hidden>■ 停止</button>
+          <span id="agentStatus" class="status"></span>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== 右栏：上下文 ===== -->
+    <aside class="context">
+      <div class="ctx-tabs">
+        <button class="ctx-tab active" data-ctx="files">📁 文件</button>
+        <button class="ctx-tab" data-ctx="steps">⚙ 执行</button>
+        <button class="ctx-tab" data-ctx="tokens">🔑 Token</button>
+      </div>
+      <div class="ctx-body">
+        <div id="ctxFiles" class="ctx-panel active">
+          <div class="ctx-head">
+            <span id="fsPath" class="fs-path">工作区间根目录</span>
+            <button id="fsRefresh" class="btn small ghost" title="刷新">⟳</button>
           </div>
-          <div id="imgPreview" class="img-preview"></div>
-          <textarea id="taskInput" rows="3" placeholder="描述任务，Enter 发送，Shift+Enter 换行 ..."></textarea>
-          <div class="row composer-row">
-            <button id="runAgent" class="btn primary">运行 Agent</button>
-            <span id="agentStatus" class="status"></span>
+          <div id="fileTree" class="file-tree"></div>
+        </div>
+        <div id="ctxSteps" class="ctx-panel">
+          <div id="stepList" class="step-list">
+            <div class="ctx-empty">运行 Agent 后，执行步骤会实时显示在这里。</div>
+          </div>
+        </div>
+        <div id="ctxTokens" class="ctx-panel">
+          <div id="tokenStatus" class="token-status">
+            <div class="ctx-empty">各平台 Token 配置状态。点「⚙ 设置」可填写或测连通。</div>
           </div>
         </div>
       </div>
-    </div>
-  </section>
+    </aside>
+  </div>
 
+  <!-- ===== 设置弹层 ===== -->
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal-mask" id="settingsMask"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>设置 / 平台 Token 配置</h2>
+        <button id="closeSettings" class="btn small ghost">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="card">
+          <h3>默认模型</h3>
+          <p class="hint">所有聊天与 Agent 都走这里选的模型。默认是 OpenCode Zen 匿名通道，零门槛免 Key。</p>
+          <div class="row">
+            <select id="modelSelect2"></select>
+            <button id="saveDefault" class="btn">保存默认</button>
+          </div>
+          <div id="defaultMsg" class="msg"></div>
+        </div>
+        <div class="card">
+          <h3>平台 Token 配置</h3>
+          <p class="hint">免费平台大多填了 Key 才用「专属额度」；OpenCode Zen 不填也能匿名用。贴完点「测连通」。</p>
+          <div id="providers" class="providers"></div>
+        </div>
+        <div class="card">
+          <h3>用量</h3>
+          <div id="usage" class="usage"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/highlight.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

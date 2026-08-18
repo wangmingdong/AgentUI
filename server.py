@@ -114,6 +114,78 @@ def _agent_summary(steps):
     return ""
 
 
+def _event_to_step(ev):
+    """把流式事件映射回 step 结构（token 事件忽略，前端已实时显示）。"""
+    t = ev.get("event")
+    if t == "tool":
+        return {"type": "tool", "tool": ev.get("tool"), "args": ev.get("args"), "output": ""}
+    if t == "tool_result":
+        return {"type": "_tool_result", "output": ev.get("output")}
+    if t == "done":
+        return {"type": "done", "text": ev.get("text")}
+    if t == "error":
+        return {"type": "error", "text": ev.get("text")}
+    return None
+
+
+def _rebuild_steps(events):
+    """从事件流重建 steps 列表（合并 tool 与其 tool_result 的 output）。"""
+    steps = []
+    for ev in events:
+        st = _event_to_step(ev)
+        if st is None:
+            continue
+        if st.get("type") == "_tool_result":
+            for s in reversed(steps):
+                if s.get("type") == "tool" and not s.get("output"):
+                    s["output"] = st["output"]
+                    break
+            continue
+        steps.append(st)
+    return steps
+
+
+def _summary_from_steps(steps):
+    for s in reversed(steps):
+        if s.get("type") in ("done", "error") and s.get("text"):
+            return s["text"]
+    for s in reversed(steps):
+        if s.get("type") == "llm" and s.get("text"):
+            return s["text"]
+    return ""
+
+
+def _list_dir_safe(ws, sub):
+    """列出 workspace 内某子目录，返回 (items, err)。越界/不存在 err 非 None。"""
+    base = os.path.realpath(ws)
+    if sub:
+        cand = os.path.realpath(os.path.join(base, sub))
+        base_n = os.path.normcase(base)
+        cand_n = os.path.normcase(cand)
+        if cand_n != base_n and not cand_n.startswith(base_n + os.sep):
+            return None, "路径越界"
+        target = cand
+    else:
+        target = base
+    if not os.path.isdir(target):
+        return None, "目录不存在"
+    items = []
+    try:
+        for name in sorted(os.listdir(target)):
+            p = os.path.join(target, name)
+            if os.path.isdir(p):
+                items.append({"name": name, "type": "dir", "size": 0})
+            else:
+                try:
+                    sz = os.path.getsize(p)
+                except OSError:
+                    sz = 0
+                items.append({"name": name, "type": "file", "size": sz})
+    except OSError as e:
+        return None, str(e)
+    return items, None
+
+
 class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         parsed = urlparse(self.path)
@@ -238,6 +310,76 @@ class Handler(BaseHTTPRequestHandler):
                 ok = store.delete_conversation(cid)
                 _send_json(self, {"ok": ok})
                 return
+
+        # 7.7) 安全工作区文件树（供右栏文件树 / @引用自动补全）
+        if method == "GET" and path == "/api/fs/list":
+            qs = parse_qs(parsed.query)
+            ws = qs.get("ws", [""])[0]
+            sub = qs.get("path", [""])[0]
+            if not store.is_valid_workspace(ws):
+                ws = store.WORKSPACE_DIR
+            items, err = _list_dir_safe(ws, sub)
+            if err:
+                _send_json(self, {"error": err}, 400)
+            else:
+                _send_json(self, {"ws": ws, "path": sub or "", "items": items})
+            return
+
+        # 7.8) Agent 流式执行（SSE 实时推送事件，结束后持久化会话）
+        if method == "POST" and path == "/api/agent/stream":
+            body = _read_body(self)
+            task = (body.get("task", "") or "").strip()
+            ws = body.get("workspace") or ""
+            if not store.is_valid_workspace(ws):
+                ws = store.WORKSPACE_DIR
+            vision_mode = bool(body.get("vision_mode"))
+            files = body.get("files") or []
+            saved_images = []
+            for im in (body.get("images") or []):
+                if im.get("data"):
+                    si = _save_image(ws, im.get("filename", "image.png"), im["data"])
+                    si["data"] = im["data"]
+                    saved_images.append(si)
+            cid = body.get("conversation_id") or ""
+            conv = store.get_conversation(cid) if cid else None
+            if not conv:
+                conv = store.new_conversation()
+                cid = conv["id"]
+            attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
+            store.append_message(cid, "user", task, attachments=attachments)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            events = []
+            try:
+                for ev in agent.run_agent_stream(task, workspace=ws, images=saved_images,
+                                                 vision_mode=vision_mode, files=files):
+                    events.append(ev)
+                    data = json.dumps(ev, ensure_ascii=False).encode("utf-8")
+                    try:
+                        self.wfile.write(b"data: " + data + b"\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                steps = _rebuild_steps(events)
+                summary = _summary_from_steps(steps)
+                conv = store.append_message(cid, "assistant", summary, steps)
+                end = {"event": "saved", "conversation_id": cid, "messages": conv["messages"]}
+                try:
+                    self.wfile.write(b"data: " + json.dumps(end, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            except Exception as e:
+                err = {"event": "error", "text": f"Agent 执行异常：{e}"}
+                try:
+                    self.wfile.write(b"data: " + json.dumps(err, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            return
 
         # 8) Agent 执行（带会话持久化 + 工作区间 + 图片）
         if method == "POST" and path == "/api/agent":

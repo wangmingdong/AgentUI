@@ -1,279 +1,368 @@
-// AgentShell 前端逻辑（原生 JS，无框架依赖）
+"use strict";
+/* AgentShell 前端：三栏（对话 / 聊天 / 上下文）+ 流式 + Markdown + @引用 */
 
-const $ = (sel) => document.querySelector(sel);
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const API = {
+  providers: "/api/providers",
+  config: "/api/config",
+  token: "/api/token",
+  test: "/api/test",
+  workspaces: "/api/workspaces",
+  conversations: "/api/conversations",
+  conv: (id) => `/api/conversations/${id}`,
+  agentStream: "/api/agent/stream",
+  fsList: (ws, path) =>
+    `/api/fs/list?ws=${encodeURIComponent(ws)}&path=${encodeURIComponent(path || "")}`,
+  file: (ws, name) =>
+    `/file?ws=${encodeURIComponent(ws)}&name=${encodeURIComponent(name)}`,
+};
 
-// ---------- Tab 切换 ----------
-document.querySelectorAll(".tab").forEach((t) => {
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
-    t.classList.add("active");
-    $("#" + t.dataset.tab).classList.add("active");
-  });
-});
+const state = {
+  providers: [],
+  currentConvId: null,
+  workspaces: [],
+  currentWorkspace: "",
+  images: [], // {filename, data}
+  running: false,
+  abort: null,
+  toolCards: [], // 右栏步骤回填
+  mentionCache: null, // {ws, files:[]}
+  mentionOpen: false,
+  mentionItems: [],
+  mentionIndex: 0,
+  mentionStart: 0,
+  mentionQuery: "",
+};
 
-// ---------- 加载配置 + 平台 ----------
-let USAGE = {}; // 全局用量（来自 /api/config）
-
-async function refresh() {
-  const [provRes, cfgRes] = await Promise.all([
-    fetch("/api/providers").then((r) => r.json()),
-    fetch("/api/config").then((r) => r.json()),
-  ]);
-  USAGE = cfgRes.usage || {};
-  renderModelSelect(provRes.providers, cfgRes);
-  renderProviders(provRes.providers);
-  renderUsage(USAGE, provRes.providers);
-  window.__PROVIDERS__ = provRes.providers;
+/* ---------- 工具 ---------- */
+async function fetchJson(url) {
+  const r = await fetch(url);
+  return r.json();
 }
-
-function renderModelSelect(providers, cfg) {
-  const sel = $("#modelSelect");
-  sel.innerHTML = "";
-  providers.forEach((p) => {
-    const og = document.createElement("optgroup");
-    og.label = p.name;
-      (p.free_models || []).forEach((m) => {
-        const opt = document.createElement("option");
-        opt.value = (p.prefix || p.key) + "/" + m;
-        opt.textContent = m + (p.free ? "（免费）" : "");
-        og.appendChild(opt);
-      });
-    sel.appendChild(og);
-  });
-  // 选中默认
-  const def = cfg.default_provider + "/" + cfg.default_model;
-  if ([...sel.options].some((o) => o.value === def)) sel.value = def;
-  else if (cfg.default_model) {
-    // 裸模型名也能选
-    const bare = [...sel.options].find((o) => o.value.endsWith("/" + cfg.default_model));
-    if (bare) sel.value = bare.value;
-  }
-}
-
-function renderProviders(providers) {
-  const box = $("#providers");
-  box.innerHTML = "";
-  providers.forEach((p) => {
-    const card = document.createElement("div");
-    card.className = "pcard";
-    const tags =
-      (p.free ? '<span class="tag free">免费</span>' : '<span class="tag paid">付费</span>') +
-      (p.requires_key ? "" : '<span class="tag noreq">免Key</span>');
-    // 访问入口页（申请/管理 Token）+ 官方发现页（仅英伟达有，且明确标注 NVIDIA 避免误以为是当前平台）
-    const links = [
-      p.console_url ? `<a class="portal-link" href="${p.console_url}" target="_blank" rel="noopener">🔗 访问入口页（申请 / 管理 Token）</a>` : "",
-      p.discover_url ? `<a class="portal-link" href="${p.discover_url}" target="_blank" rel="noopener">🧭 NVIDIA 官方发现页（查免费模型）</a>` : "",
-    ].filter(Boolean).join("");
-    const portal = links ? `<div class="portal">${links}</div>` : "";
-    card.innerHTML = `
-      <h3>${p.name} ${tags}</h3>
-      <div class="meta">${p.base_url}</div>
-      <div class="meta">限速：${p.rate_limit}</div>
-      <div class="models">免费模型：${(p.free_models || []).join("、") || "—"}</div>
-      ${portal}
-      <div class="meta note">${p.note}</div>
-      <input type="password" class="tok" placeholder="API Key（${p.has_token ? "已配置" : "未配置"}）" />
-      <div class="usage">
-        <div class="ubar"><div class="ubar-fill"></div></div>
-        <div class="umeta"></div>
-      </div>
-      <div class="actions">
-        <button class="btn" data-act="save">保存</button>
-        <button class="btn" data-act="test">测连通</button>
-        <span class="tstatus"></span>
-      </div>`;
-
-    const tokInput = card.querySelector(".tok");
-    const saveBtn = card.querySelector('[data-act="save"]');
-    const testBtn = card.querySelector('[data-act="test"]');
-    const st = card.querySelector(".tstatus");
-    const fill = card.querySelector(".ubar-fill");
-    const umeta = card.querySelector(".umeta");
-
-    // 用量进度条（累计调用 vs 参考限额）
-    const u = USAGE[p.key] || { calls: 0, tokens: 0 };
-    const quota = p.quota_hint || 0;
-    const pct = quota ? Math.min(u.calls / quota, 1) * 100 : 0;
-    fill.style.width = pct.toFixed(0) + "%";
-    fill.classList.toggle("warn", pct >= 70 && pct < 90);
-    fill.classList.toggle("danger", pct >= 90);
-    umeta.textContent = `用量：已调用 ${u.calls} 次 · 约 ${u.tokens} tokens（参考上限 ${quota || "?"} 次/周期，仅供参考）`;
-
-    // 保存：反馈 + 防抖
-    saveBtn.addEventListener("click", async () => {
-      if (saveBtn.disabled) return; // 防抖：请求期间禁止重复点击
-      const key = tokInput.value.trim();
-      saveBtn.disabled = true;
-      const orig = saveBtn.textContent;
-      saveBtn.textContent = "保存中…";
-      saveBtn.classList.remove("ok", "fail");
-      try {
-        const r = await fetch("/api/token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider_key: p.key, api_key: key }),
-        });
-        if (r.ok) {
-          saveBtn.textContent = "✓ 已保存";
-          saveBtn.classList.add("ok");
-          tokInput.placeholder = key ? "已配置" : "未配置";
-          if (key) tokInput.value = ""; // 清空明文，避免残留
-        } else {
-          saveBtn.textContent = "✗ 保存失败";
-          saveBtn.classList.add("fail");
-        }
-      } catch (e) {
-        saveBtn.textContent = "✗ 保存失败";
-        saveBtn.classList.add("fail");
-      } finally {
-        setTimeout(() => {
-          saveBtn.textContent = orig;
-          saveBtn.disabled = false;
-          saveBtn.classList.remove("ok", "fail");
-        }, 2200);
-      }
-    });
-
-    // 测连通：loading 提示 + 防抖
-    testBtn.addEventListener("click", async () => {
-      if (testBtn.disabled) return; // 防抖
-      testBtn.disabled = true;
-      st.textContent = "测试中…";
-      st.className = "tstatus";
-      try {
-        const r = await fetch("/api/test", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider_key: p.key }),
-        }).then((x) => x.json());
-        st.textContent = r.message;
-        st.className = "tstatus " + (r.ok ? "status-ok" : "status-fail");
-        // 测连通成功说明调用数 +1，刷新进度条
-        if (r.ok) refresh();
-      } catch (e) {
-        st.textContent = "请求出错：" + e.message;
-        st.className = "tstatus status-fail";
-      } finally {
-        testBtn.disabled = false;
-      }
-    });
-
-    box.appendChild(card);
-  });
-}
-
-function renderUsage(usage, providers) {
-  const box = $("#usage");
-  const quotaMap = {};
-  const nameMap = {};
-  (providers || []).forEach((p) => {
-    quotaMap[p.key] = p.quota_hint || 0;
-    nameMap[p.key] = p.name;
-  });
-  const keys = Object.keys(usage || {});
-  if (!keys.length) {
-    box.innerHTML = '<div class="meta">还没有调用记录。用一次就会显示在这里和每张平台卡片上。</div>';
-    return;
-  }
-  box.innerHTML =
-    '<div class="usage-list">' +
-    keys
-      .map((k) => {
-        const u = usage[k];
-        const quota = quotaMap[k] || 0;
-        const pct = quota ? Math.min(u.calls / quota, 1) * 100 : 0;
-        const cls = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
-        return `<div class="usage-row">
-          <div class="urow-head"><span class="urow-name">${nameMap[k] || k}</span>
-          <span class="urow-num">${u.calls} 次 · 约 ${u.tokens} tokens</span></div>
-          <div class="ubar"><div class="ubar-fill ${cls}" style="width:${pct.toFixed(0)}%"></div></div>
-        </div>`;
-      })
-      .join("") +
-    "</div>";
-}
-
-// ---------- 保存默认模型 ----------
-$("#saveDefault").addEventListener("click", async () => {
-  const v = $("#modelSelect").value; // provider/model
-  const [dp, dm] = v.split("/", 1).length ? [v.split("/")[0], v.split("/").slice(1).join("/")] : ["", v];
-  await fetch("/api/config", {
+async function postJson(url, body) {
+  const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ default_provider: dp, default_model: dm }),
+    body: JSON.stringify(body || {}),
   });
-  const msg = $("#defaultMsg");
-  msg.textContent = "已保存默认模型：" + v;
-  setTimeout(() => (msg.textContent = ""), 2500);
-});
+  return r.json();
+}
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function modelKeyOf(val) {
+  const i = val.indexOf("/");
+  return i < 0 ? "" : val.slice(0, i);
+}
+function modelIdOf(val) {
+  const i = val.indexOf("/");
+  return i < 0 ? val : val.slice(i + 1);
+}
 
-// ============================================================
-//  多对话 + Agent 交互（按钮 loading 防抖、回车提交）
-// ============================================================
-let currentConvId = null;
-let currentWorkspace = "";   // 当前选中的工作区间绝对路径
-let pendingImages = [];      // 待上传图片 [{filename, data(base64), mime}]
-
-// ---------- 工作区间（增加/删除/切换） ----------
-const WS_KEY = "agentshell_workspace";  // localStorage 键，记住上次选的工作区间
-
-async function loadWorkspaces() {
-  const r = await fetch("/api/workspaces").then((x) => x.json());
-  // 恢复上次选择（刷新页面不再退回默认空沙箱）
-  const saved = localStorage.getItem(WS_KEY) || "";
-  if (saved && (r.workspaces || []).includes(saved)) {
-    currentWorkspace = saved;
+/* ---------- Markdown + 高亮 ---------- */
+marked.setOptions({ gfm: true, breaks: true });
+function renderMD(text) {
+  try {
+    return marked.parse(text || "");
+  } catch (e) {
+    return escapeHtml(text || "");
   }
-  const sel = $("#wsSelect");
-  sel.innerHTML = "";
-  (r.workspaces || []).forEach((p) => {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = p + (p === r.default ? "（主）" : "");
-    sel.appendChild(opt);
+}
+function highlightWithin(root) {
+  $$("pre code", root).forEach((el) => {
+    try {
+      hljs.highlightElement(el);
+    } catch (e) {}
   });
-  if (currentWorkspace && (r.workspaces || []).includes(currentWorkspace)) {
-    sel.value = currentWorkspace;
-  } else {
-    currentWorkspace = r.default || (r.workspaces && r.workspaces[0]) || "";
-    if (currentWorkspace) sel.value = currentWorkspace;
-  }
+  $$("pre", root).forEach((pre) => {
+    if (pre.querySelector(".copy-btn")) return;
+    const btn = document.createElement("button");
+    btn.className = "copy-btn";
+    btn.textContent = "复制";
+    btn.addEventListener("click", () => {
+      const code = pre.querySelector("code");
+      const txt = code ? code.innerText : pre.innerText;
+      navigator.clipboard.writeText(txt).then(() => {
+        btn.textContent = "已复制";
+        setTimeout(() => (btn.textContent = "复制"), 1200);
+      });
+    });
+    pre.appendChild(btn);
+  });
+}
+
+/* ---------- 初始化 ---------- */
+async function init() {
+  bindEvents();
+  await loadProviders();
+  await loadConfig();
+  await loadWorkspaces();
+  await loadConversations();
+  if (state.currentWorkspace) loadFileTree(state.currentWorkspace, "");
+  renderTokenStatus();
   updateVisionHint();
 }
 
-function currentProviderKey() {
-  const v = $("#modelSelect").value || "";
-  return v.split("/")[0];
+function bindEvents() {
+  $("#newConv").addEventListener("click", newConversation);
+  $("#convSearch").addEventListener("input", filterConvs);
+  $("#runAgent").addEventListener("click", runAgent);
+  $("#stopAgent").addEventListener("click", stopAgent);
+  $("#taskInput").addEventListener("keydown", onTaskKeydown);
+  $("#taskInput").addEventListener("input", onTaskInput);
+  $("#imgBtn").addEventListener("click", () => $("#imgInput").click());
+  $("#imgInput").addEventListener("change", onImages);
+  $("#modelSelect").addEventListener("change", onModelChange);
+  $("#modelSelect2").addEventListener("change", () => {
+    $("#modelSelect").value = $("#modelSelect2").value;
+    onModelChange();
+  });
+  $("#saveDefault").addEventListener("click", saveDefault);
+  $("#openSettings").addEventListener("click", () => ($("#settingsModal").hidden = false));
+  $("#closeSettings").addEventListener("click", () => ($("#settingsModal").hidden = true));
+  $("#settingsMask").addEventListener("click", () => ($("#settingsModal").hidden = true));
+  // 工作区间
+  $("#wsAdd").addEventListener("click", () => {
+    const p = prompt("输入要添加的项目目录绝对路径：");
+    if (p) addWorkspace(p);
+  });
+  $("#wsAddApp").addEventListener("click", addAppWorkspace);
+  $("#wsDel").addEventListener("click", delWorkspace);
+  $("#wsSelect").addEventListener("change", () => {
+    state.currentWorkspace = $("#wsSelect").value;
+    loadFileTree(state.currentWorkspace, "");
+  });
+  // 右栏 tabs
+  $$(".ctx-tab").forEach((t) =>
+    t.addEventListener("click", () => {
+      $$(".ctx-tab").forEach((x) => x.classList.remove("active"));
+      $$(".ctx-panel").forEach((x) => x.classList.remove("active"));
+      t.classList.add("active");
+      $("#ctx" + t.dataset.ctx.charAt(0).toUpperCase() + t.dataset.ctx.slice(1)).classList.add("active");
+    })
+  );
+  $("#fsRefresh").addEventListener("click", () => loadFileTree(state.currentWorkspace, ""));
+  // 全局点击关闭 mention
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#mentionBox") && e.target !== $("#taskInput")) closeMentions();
+  });
 }
 
+/* ---------- Providers / 模型 ---------- */
+async function loadProviders() {
+  const data = await fetchJson(API.providers);
+  state.providers = data.providers || [];
+}
+function renderModelSelect() {
+  const opts = (sel) => {
+    sel.innerHTML = "";
+    state.providers.forEach((p) => {
+      const og = document.createElement("optgroup");
+      og.label = p.name;
+      (p.free_models || []).forEach((mid) => {
+        const o = document.createElement("option");
+        o.value = `${p.key}/${mid}`;
+        o.textContent = `${p.name} · ${mid}`;
+        og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+  };
+  opts($("#modelSelect"));
+  opts($("#modelSelect2"));
+}
+async function loadConfig() {
+  const data = await fetchJson(API.config);
+  renderModelSelect();
+  const val = `${data.default_provider}/${data.default_model}`;
+  if ($(`#modelSelect option[value="${CSS.escape(val)}"]`)) {
+    $("#modelSelect").value = val;
+    $("#modelSelect2").value = val;
+  }
+  await loadUsage(data.usage);
+}
+async function loadUsage(usage) {
+  usage = usage || (await fetchJson(API.config)).usage;
+  const box = $("#usage");
+  const rows = state.providers
+    .map((p) => {
+      const u = usage[p.key] || { calls: 0, tokens: 0 };
+      const q = p.quota_hint || 1;
+      const pct = Math.min(100, Math.round((u.calls / q) * 100));
+      const cls = pct > 85 ? "danger" : pct > 60 ? "warn" : "";
+      return `<div class="usage-row"><div class="urow-head"><span class="urow-name">${escapeHtml(
+        p.name
+      )}</span><span class="urow-num">${u.calls} 次 / ${u.tokens} tok</span></div>
+        <div class="ubar"><div class="ubar-fill ${cls}" style="width:${pct}%"></div></div></div>`;
+    })
+    .join("");
+  box.innerHTML = `<div class="usage-list">${rows}</div>`;
+}
+function onModelChange() {
+  const val = $("#modelSelect").value;
+  $("#modelSelect2").value = val;
+  const pk = modelKeyOf(val);
+  const mid = modelIdOf(val);
+  postJson(API.config, { default_provider: pk, default_model: mid });
+  updateVisionHint();
+}
+async function saveDefault() {
+  onModelChange();
+  $("#defaultMsg").textContent = "已保存默认模型 ✓";
+  setTimeout(() => ($("#defaultMsg").textContent = ""), 2000);
+  const data = await fetchJson(API.config);
+  await loadUsage(data.usage);
+}
 function updateVisionHint() {
+  const val = $("#modelSelect").value;
+  const pk = modelKeyOf(val);
+  const mid = modelIdOf(val);
+  const p = state.providers.find((x) => x.key === pk);
   const hint = $("#visionHint");
-  const val = $("#modelSelect").value || "";
-  const head = val.split("/")[0];
-  const modelId = val.slice(head.length + 1);
-  const prov = (window.__PROVIDERS__ || []).find((p) => (p.prefix || p.key) === head);
-  if (!prov || !prov.vision) {
-    hint.textContent = "当前默认模型可能不支持看图；图片将存为文件供 Agent 处理。改用支持视觉的平台并勾选「视觉输入」可让模型直接看图。";
+  if (!p) {
+    hint.textContent = "";
     return;
   }
-  // 平台有视觉能力，但只有部分模型支持看图（如商汤仅 6.8-flash-lite）
-  const vm = prov.vision_models || [];
-  if (vm.length && !vm.includes(modelId)) {
-    hint.textContent = "当前选的「" + modelId + "」可能不支持看图；改用该平台支持视觉的模型（如 " + vm.join("、") + "）并勾选「视觉输入」可让模型直接看图。图片也可存为文件供 Agent 处理。";
+  const vm = p.vision_models || [];
+  if (vm.includes(mid)) {
+    hint.textContent = "✅ 当前模型支持图片输入";
+    hint.className = "ws-hint ok";
+  } else if (vm.length) {
+    hint.textContent = `⚠️ 该模型不支持看图，支持的有：${vm.join("、")}`;
+    hint.className = "ws-hint fail";
   } else {
-    hint.textContent = "";
+    hint.textContent = "该平台暂未标注视觉模型";
+    hint.className = "ws-hint";
   }
 }
 
+/* ---------- 平台 Token 配置（设置弹层） ---------- */
+function renderProviders() {
+  const box = $("#providers");
+  box.innerHTML = "";
+  state.providers.forEach((p) => {
+    const card = document.createElement("div");
+    card.className = "pcard";
+    const tag = p.free ? "free" : "paid";
+    const tagText = p.free ? "免费" : "付费";
+    card.innerHTML = `
+      <h3>${escapeHtml(p.name)} <span class="tag ${tag}">${tagText}</span></h3>
+      <div class="meta">${escapeHtml(p.rate_limit || "")}</div>
+      <div class="models">模型：${escapeHtml((p.free_models || []).join("，"))}</div>
+      <div class="note">${escapeHtml(p.note || "")}</div>
+      <div class="portal">
+        ${p.console_url ? `<a class="portal-link" href="${p.console_url}" target="_blank" rel="noopener">🔗 访问入口页</a>` : ""}
+        ${p.discover_url ? `<a class="portal-link" href="${p.discover_url}" target="_blank" rel="noopener">🧭 发现页</a>` : ""}
+      </div>
+      <div class="tok"><input type="password" placeholder="${p.requires_key ? "填 API Key（留空不改）" : "可不填（匿名）"}" /></div>
+      <div class="actions">
+        <button class="btn small save">保存</button>
+        <button class="btn small test">测连通</button>
+      </div>
+      <div class="tstatus"></div>`;
+    const input = card.querySelector("input");
+    card.querySelector(".save").addEventListener("click", async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      await postJson(API.token, { provider_key: p.key, api_key: v });
+      input.value = "";
+      const st = card.querySelector(".tstatus");
+      st.className = "tstatus status-ok";
+      st.textContent = "已保存 Token ✓";
+      await loadProviders();
+      renderTokenStatus();
+    });
+    card.querySelector(".test").addEventListener("click", async () => {
+      const btn = card.querySelector(".test");
+      const st = card.querySelector(".tstatus");
+      btn.disabled = true;
+      st.className = "tstatus";
+      st.textContent = "连通测试中…";
+      const r = await postJson(API.test, { provider_key: p.key });
+      st.className = "tstatus " + (r.ok ? "status-ok" : "status-fail");
+      st.textContent = (r.ok ? "✅ " : "❌ ") + r.message;
+      btn.disabled = false;
+      await loadProviders();
+      renderTokenStatus();
+    });
+    box.appendChild(card);
+  });
+}
+function renderTokenStatus() {
+  const box = $("#tokenStatus");
+  box.innerHTML = "";
+  state.providers.forEach((p) => {
+    const row = document.createElement("div");
+    row.className = "token-row";
+    row.innerHTML = `<span class="tr-name">${escapeHtml(p.name)}</span>
+      <span class="tr-state ${p.has_token ? "configured" : "empty"}">${p.has_token ? "已配 Key" : "未配置"}</span>`;
+    const btn = document.createElement("button");
+    btn.className = "btn small";
+    btn.textContent = "测连通";
+    const res = document.createElement("span");
+    res.className = "ws-hint";
+    res.style.marginLeft = "8px";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      res.textContent = "测试中…";
+      const r = await postJson(API.test, { provider_key: p.key });
+      res.textContent = r.ok ? "✅ " + r.message : "❌ " + r.message;
+      res.className = "ws-hint " + (r.ok ? "ok" : "fail");
+      btn.disabled = false;
+    });
+    row.appendChild(btn);
+    row.appendChild(res);
+    box.appendChild(row);
+  });
+}
+
+/* ---------- 工作区间 ---------- */
+async function loadWorkspaces() {
+  const data = await fetchJson(API.workspaces);
+  state.workspaces = data.workspaces || [];
+  state.currentWorkspace = data.default || state.workspaces[0] || "";
+  const sel = $("#wsSelect");
+  sel.innerHTML = "";
+  state.workspaces.forEach((w) => {
+    const o = document.createElement("option");
+    o.value = w;
+    o.textContent = w;
+    sel.appendChild(o);
+  });
+  sel.value = state.currentWorkspace;
+}
+async function addWorkspace(p) {
+  const r = await postJson(API.workspaces, { path: p });
+  $("#wsHint").textContent = r.message;
+  $("#wsHint").className = "ws-hint " + (r.ok ? "ok" : "fail");
+  if (r.ok) await loadWorkspaces();
+  setTimeout(() => ($("#wsHint").textContent = ""), 2500);
+}
+async function addAppWorkspace() {
+  const data = await fetchJson(API.workspaces);
+  await addWorkspace(data.app_dir);
+}
+async function delWorkspace() {
+  const w = $("#wsSelect").value;
+  const r = await postJson(API.workspaces, { path: w });
+  const m = await fetch(`${API.workspaces}?x=1`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: w }) });
+  await loadWorkspaces();
+}
+
+/* ---------- 对话列表 ---------- */
 async function loadConversations() {
-  const r = await fetch("/api/conversations").then((x) => x.json());
-  renderConvList(r.conversations || []);
-  if (!currentConvId && (r.conversations || []).length) {
-    selectConv(r.conversations[0].id);
-  }
+  const data = await fetchJson(API.conversations);
+  renderConvList(data.conversations || []);
 }
-
 function renderConvList(convs) {
   const box = $("#convItems");
   box.innerHTML = "";
@@ -281,382 +370,518 @@ function renderConvList(convs) {
     box.innerHTML = '<div class="conv-empty">还没有对话</div>';
     return;
   }
-  convs.forEach((c) => {
-    const item = document.createElement("div");
-    item.className = "conv-item" + (c.id === currentConvId ? " active" : "");
-    const title = document.createElement("span");
-    title.className = "conv-title";
-    title.textContent = c.title || "新对话";
-    title.addEventListener("click", () => selectConv(c.id));
-    const del = document.createElement("button");
-    del.className = "conv-del";
-    del.title = "删除对话";
-    del.textContent = "×";
-    del.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (!confirm("确定删除这个对话？")) return;
-      await fetch("/api/conversations/" + c.id, { method: "DELETE" });
-      if (c.id === currentConvId) {
-        currentConvId = null;
-        $("#messages").innerHTML = '<div class="empty-hint">已删除，点「+ 新建对话」开始。</div>';
-      }
-      loadConversations();
+  const q = ($("#convSearch").value || "").toLowerCase();
+  convs
+    .filter((c) => !q || (c.title || "").toLowerCase().includes(q))
+    .forEach((c) => {
+      const item = document.createElement("div");
+      item.className = "conv-item" + (c.id === state.currentConvId ? " active" : "");
+      item.innerHTML = `<span class="conv-title">${escapeHtml(c.title || "新对话")}</span>
+        <button class="conv-del" title="删除">✕</button>`;
+      item.querySelector(".conv-title").addEventListener("click", () => selectConv(c.id));
+      item.querySelector(".conv-del").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm("删除该对话？")) return;
+        await fetch(API.conv(c.id), { method: "DELETE" });
+        if (state.currentConvId === c.id) {
+          state.currentConvId = null;
+          $("#messages").innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
+        }
+        await loadConversations();
+      });
+      box.appendChild(item);
     });
-    item.append(title, del);
-    box.appendChild(item);
-  });
 }
-
+function filterConvs() {
+  loadConversations();
+}
+async function newConversation() {
+  const conv = await postJson(API.conversations, { title: "新对话" });
+  await loadConversations();
+  await selectConv(conv.conversation.id);
+}
 async function selectConv(id) {
-  currentConvId = id;
-  const list = await fetch("/api/conversations").then((x) => x.json());
-  renderConvList(list.conversations || []);
-  const r = await fetch("/api/conversations/" + id).then((x) => x.json());
-  renderMessages(r.conversation ? r.conversation.messages : []);
+  state.currentConvId = id;
+  $$(".conv-item").forEach((x) => x.classList.remove("active"));
+  const conv = await fetchJson(API.conv(id));
+  renderMessages(conv.conversation.messages || []);
+  await loadConversations();
 }
 
-function fmtTime(ts) {
-  if (!ts) return "";
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-}
-
+/* ---------- 消息渲染 ---------- */
 function renderMessages(messages) {
   const box = $("#messages");
   box.innerHTML = "";
-  if (!messages || !messages.length) {
-    box.innerHTML = '<div class="empty-hint">这个对话还是空的，输入任务开聊吧。</div>';
+  if (!messages.length) {
+    box.innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
     return;
   }
   messages.forEach((m) => box.appendChild(renderMessage(m)));
   box.scrollTop = box.scrollHeight;
 }
-
 function renderMessage(m) {
-  const wrap = document.createElement("div");
-  wrap.className = "msg " + (m.role === "user" ? "msg-user" : "msg-bot");
+  const row = document.createElement("div");
+  row.className = "msg-row " + (m.role === "user" ? "msg-user" : "msg-bot");
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-
   if (m.role === "user") {
-    bubble.textContent = m.content;
+    bubble.textContent = m.content || "";
     if (m.attachments && m.attachments.length) {
       const gal = document.createElement("div");
       gal.className = "attach-gallery";
       m.attachments.forEach((a) => {
         const img = document.createElement("img");
         img.className = "attach-img";
-        img.src = "/file?ws=" + encodeURIComponent(a.ws || currentWorkspace) + "&name=" + encodeURIComponent(a.rel);
-        img.alt = a.name || "";
+        img.src = API.file(a.ws, a.rel);
         gal.appendChild(img);
       });
       bubble.appendChild(gal);
     }
-  } else if (m.steps && m.steps.length) {
-    const sum = document.createElement("div");
-    sum.className = "bot-summary";
-    sum.textContent = m.content || "（无文本回答）";
-    bubble.appendChild(sum);
-    const toggle = document.createElement("button");
-    toggle.className = "step-toggle";
-    const stepsBox = document.createElement("div");
-    stepsBox.className = "steps hidden";
-    m.steps.forEach((s) => stepsBox.appendChild(renderStep(s)));
-    toggle.textContent = "▸ 查看执行过程 (" + m.steps.length + " 步)";
-    toggle.addEventListener("click", () => {
-      const hidden = stepsBox.classList.toggle("hidden");
-      toggle.textContent = (hidden ? "▸" : "▾") + " 查看执行过程 (" + m.steps.length + " 步)";
-    });
-    bubble.appendChild(toggle);
-    bubble.appendChild(stepsBox);
   } else {
-    bubble.textContent = m.content || "（无内容）";
+    const inner = document.createElement("div");
+    inner.className = "bubble-inner";
+    inner.innerHTML = renderMD(m.content || "");
+    highlightWithin(inner);
+    bubble.appendChild(inner);
+    if (m.steps && m.steps.length) bubble.appendChild(renderSteps(m.steps));
   }
-
+  row.appendChild(bubble);
   const meta = document.createElement("div");
   meta.className = "msg-meta";
-  meta.textContent = fmtTime(m.ts);
-  wrap.append(bubble, meta);
+  meta.textContent = fmtTime(m.ts) + (m.role === "user" ? "" : " · Agent");
+  row.appendChild(meta);
+  return row;
+}
+function renderSteps(steps) {
+  const wrap = document.createElement("div");
+  wrap.style.marginTop = "8px";
+  const toggle = document.createElement("button");
+  toggle.className = "step-toggle";
+  toggle.textContent = "▸ 查看执行步骤";
+  const box = document.createElement("div");
+  box.className = "steps hidden";
+  toggle.addEventListener("click", () => {
+    box.classList.toggle("hidden");
+    toggle.textContent = (box.classList.contains("hidden") ? "▸" : "▾") + " 查看执行步骤";
+  });
+  steps.forEach((s) => box.appendChild(renderStepCard(s, false)));
+  wrap.appendChild(toggle);
+  wrap.appendChild(box);
   return wrap;
 }
-
-function renderStep(s) {
-  const div = document.createElement("div");
-  div.className = "step";
-  if (s.type === "llm") {
-    const label = document.createElement("div");
-    label.className = "label";
-    label.textContent = "模型思考（" + (s.provider || "") + "）";
-    const text = document.createElement("div");
-    text.className = "text";
-    text.textContent = s.text || "";
-    div.append(label, text);
-  } else if (s.type === "tool") {
-    const label = document.createElement("div");
-    label.className = "label";
-    const t = document.createElement("span");
-    t.className = "tool";
-    t.textContent = s.tool;
-    label.textContent = "调用工具：";
-    label.appendChild(t);
-    const pre = document.createElement("pre");
-    pre.textContent =
-      "参数: " + JSON.stringify(s.args, null, 2) + "\n\n结果:\n" + (s.output || "");
-    div.append(label, pre);
+function renderStepCard(s, live) {
+  const card = document.createElement("div");
+  card.className = "step-card";
+  if (s.type === "tool") {
+    card.innerHTML = `<div class="sc-head"><span class="badge tool">工具</span> ${escapeHtml(
+      s.tool || ""
+    )}</div><div class="sc-text">${escapeHtml(JSON.stringify(s.args || {}, null, 2))}</div>`;
+    const out = document.createElement("pre");
+    out.style.display = "none";
+    card.appendChild(out);
   } else if (s.type === "done") {
-    const label = document.createElement("div");
-    label.className = "label";
-    label.textContent = "最终回答";
-    const text = document.createElement("div");
-    text.className = "text";
-    text.textContent = s.text || "";
-    div.append(label, text);
+    card.innerHTML = `<div class="sc-head"><span class="badge done">完成</span></div>`;
   } else if (s.type === "error") {
-    const label = document.createElement("div");
-    label.className = "label";
-    label.style.color = "var(--red)";
-    label.textContent = "出错";
-    const text = document.createElement("div");
-    text.className = "text";
-    text.textContent = s.text || "";
-    div.append(label, text);
+    card.innerHTML = `<div class="sc-head"><span class="badge error">出错</span></div><div class="sc-text">${escapeHtml(
+      s.text || ""
+    )}</div>`;
+  } else {
+    card.innerHTML = `<div class="sc-head"><span class="badge llm">思考</span></div><div class="sc-text">${escapeHtml(
+      s.text || ""
+    )}</div>`;
   }
-  return div;
+  return card;
 }
 
-// ---------- 运行 Agent（loading 防抖 + 回车触发） ----------
-function setRunning(running) {
-  const btn = $("#runAgent");
-  const input = $("#taskInput");
-  btn.disabled = running;
-  input.disabled = running;
-  btn.textContent = running ? "运行中…" : "运行 Agent";
-  btn.classList.toggle("loading", running);
+/* ---------- 本地即时气泡 ---------- */
+function appendLocalUser(task, images) {
+  const box = $("#messages");
+  const row = document.createElement("div");
+  row.className = "msg-row msg-user";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = task || "(空任务)";
+  if (images && images.length) {
+    const gal = document.createElement("div");
+    gal.className = "attach-gallery";
+    images.forEach((im) => {
+      const img = document.createElement("img");
+      img.className = "attach-img";
+      img.src = "data:" + (im.mime || "image/png") + ";base64," + im.data;
+      gal.appendChild(img);
+    });
+    bubble.appendChild(gal);
+  }
+  row.appendChild(bubble);
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+function appendLocalAssistant() {
+  const box = $("#messages");
+  const row = document.createElement("div");
+  row.className = "msg-row msg-bot";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  const inner = document.createElement("div");
+  inner.className = "bubble-inner";
+  inner.style.whiteSpace = "pre-wrap";
+  const textSpan = document.createElement("span");
+  const cursor = document.createElement("span");
+  cursor.className = "cursor";
+  inner.appendChild(textSpan);
+  inner.appendChild(cursor);
+  bubble.appendChild(inner);
+  row.appendChild(bubble);
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+  return { row, inner, textSpan, cursor };
 }
 
-$("#runAgent").addEventListener("click", () => runAgent());
+/* ---------- 运行 Agent（流式） ---------- */
+function setRunning(r) {
+  state.running = r;
+  $("#runAgent").hidden = r;
+  $("#stopAgent").hidden = !r;
+  $("#agentStatus").textContent = r ? "Agent 运行中…（可点停止）" : "";
+}
+function stopAgent() {
+  if (state.abort) state.abort.abort();
+}
+async function runAgent() {
+  if (state.running) return;
+  const raw = $("#taskInput").value.trim();
+  if (!raw) return;
+  const files = extractMentions(raw);
+  const task = raw.replace(/@[^\s@]+/g, "").replace(/\s+/g, " ").trim();
+  if (!task && !files.length && !state.images.length) return;
 
-$("#taskInput").addEventListener("keydown", (e) => {
+  appendLocalUser(task, state.images);
+  const a = appendLocalAssistant();
+  state.toolCards = [];
+  $("#stepList").innerHTML = "";
+  switchCtx("steps");
+  setRunning(true);
+  state.abort = new AbortController();
+
+  const body = {
+    task,
+    workspace: state.currentWorkspace,
+    vision_mode: $("#visionChk").checked,
+    files,
+    images: state.images,
+    conversation_id: state.currentConvId || "",
+  };
+  try {
+    const resp = await fetch(API.agentStream, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: state.abort.signal,
+    });
+    if (!resp.ok) {
+      a.textSpan.textContent = "⚠️ 服务返回 " + resp.status;
+      a.cursor.remove();
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        chunk
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .forEach((l) => {
+            const d = l.slice(5).trim();
+            if (d) handleEvent(JSON.parse(d), a);
+          });
+      }
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      a.textSpan.textContent += "\n\n[已停止]";
+    } else {
+      a.textSpan.textContent = "⚠️ 请求出错：" + e.message;
+    }
+  } finally {
+    a.cursor.remove();
+    setRunning(false);
+    state.images = [];
+    renderImgPreview();
+  }
+}
+function handleEvent(ev, a) {
+  switch (ev.event) {
+    case "llm_start":
+      break;
+    case "token":
+      a.textSpan.textContent += ev.text;
+      $("#messages").scrollTop = $("#messages").scrollHeight;
+      break;
+    case "tool":
+      switchCtx("steps");
+      {
+        const card = renderStepCard({ type: "tool", tool: ev.tool, args: ev.args }, true);
+        $("#stepList").appendChild(card);
+        state.toolCards.push(card);
+      }
+      break;
+    case "tool_result": {
+      const card = state.toolCards.shift();
+      if (card) {
+        const out = card.querySelector("pre");
+        out.style.display = "block";
+        out.textContent = ev.output || "";
+      }
+      break;
+    }
+    case "done":
+      a.inner.innerHTML = renderMD(ev.text || "");
+      highlightWithin(a.inner);
+      {
+        const card = renderStepCard({ type: "done" }, true);
+        $("#stepList").appendChild(card);
+      }
+      break;
+    case "error":
+      a.inner.innerHTML = renderMD("⚠️ " + (ev.text || "出错"));
+      highlightWithin(a.inner);
+      {
+        const card = renderStepCard({ type: "error", text: ev.text }, true);
+        $("#stepList").appendChild(card);
+      }
+      break;
+    case "saved":
+      state.currentConvId = ev.conversation_id;
+      renderMessages(ev.messages);
+      loadConversations();
+      break;
+  }
+}
+function switchCtx(name) {
+  $$(".ctx-tab").forEach((x) => x.classList.remove("active"));
+  $$(".ctx-panel").forEach((x) => x.classList.remove("active"));
+  const tab = $(`.ctx-tab[data-ctx="${name}"]`);
+  if (tab) tab.classList.add("active");
+  $("#ctx" + name.charAt(0).toUpperCase() + name.slice(1)).classList.add("active");
+}
+
+/* ---------- @引用提取 ---------- */
+function extractMentions(text) {
+  const set = new Set();
+  const re = /@([^\s@]+)/g;
+  let m;
+  while ((m = re.exec(text))) set.add(m[1]);
+  return Array.from(set);
+}
+
+/* ---------- 输入：发送 / mention ---------- */
+function onTaskKeydown(e) {
   if (e.key === "Enter" && !e.shiftKey) {
+    if (state.mentionOpen && state.mentionItems.length) {
+      e.preventDefault();
+      applyMention();
+      return;
+    }
     e.preventDefault();
     runAgent();
-  }
-});
-
-async function runAgent() {
-  const input = $("#taskInput");
-  const task = input.value.trim();
-  if (!task && pendingImages.length === 0) return;
-
-  // 视觉输入兼容性检查：勾选视觉输入且上传了图片时，当前默认模型必须支持看图
-  if (pendingImages.length && $("#visionChk").checked) {
-    const val = $("#modelSelect").value || "";
-    const head = val.split("/")[0];
-    const modelId = val.slice(head.length + 1);
-    const prov = (window.__PROVIDERS__ || []).find((p) => (p.prefix || p.key) === head);
-    const visionModels = prov ? (prov.vision_models || []) : [];
-    if (visionModels.length && !visionModels.includes(modelId)) {
-      alert(
-        `当前默认模型「${modelId}」不支持图片输入。\n` +
-        `请先在「设置 / Token」页换成支持视觉的模型（如 ${visionModels.join("、")}），\n` +
-        `或取消勾选「视觉输入」让 Agent 把图片当文件处理。`
-      );
-      return;
-    }
-  }
-
-  const status = $("#agentStatus");
-
-  setRunning(true);
-  status.textContent = "Agent 执行中…";
-
-  // 先放一个临时「思考中」气泡，避免等待期间无反馈
-  const box = $("#messages");
-  const emptyHint = box.querySelector(".empty-hint");
-  if (emptyHint) box.innerHTML = "";
-  const tmp = document.createElement("div");
-  tmp.className = "msg msg-bot";
-  tmp.innerHTML = '<div class="bubble loading-bubble">⏳ 正在规划与执行，请稍候…</div>';
-  box.appendChild(tmp);
-  box.scrollTop = box.scrollHeight;
-
-  try {
-    const payload = {
-      task,
-      conversation_id: currentConvId || "",
-      workspace: currentWorkspace,
-      vision_mode: $("#visionChk").checked,
-      images: pendingImages,
-    };
-    const r = await fetch("/api/agent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).then((x) => x.json());
-
-    if (r.error) {
-      status.textContent = "失败：" + r.error;
-      tmp.querySelector(".bubble").textContent = "⚠️ " + r.error;
-      return;
-    }
-    currentConvId = r.conversation_id;
-    if (r.workspace) applyWorkspace(r.workspace);
-    input.value = "";
-    pendingImages = [];
-    renderImgPreview();
-    renderMessages(r.messages);
-    status.textContent = "完成";
-    loadConversations(); // 刷新左侧标题/列表
-  } catch (err) {
-    status.textContent = "请求出错：" + err.message;
-    if (currentConvId) {
-      const r2 = await fetch("/api/conversations/" + currentConvId).then((x) => x.json());
-      renderMessages(r2.conversation ? r2.conversation.messages : []);
-    } else {
-      tmp.querySelector(".bubble").textContent = "⚠️ 网络或服务器错误：" + err.message;
-    }
-  } finally {
-    setRunning(false);
+  } else if (e.key === "ArrowDown" && state.mentionOpen) {
+    e.preventDefault();
+    state.mentionIndex = (state.mentionIndex + 1) % state.mentionItems.length;
+    renderMentionBox();
+  } else if (e.key === "ArrowUp" && state.mentionOpen) {
+    e.preventDefault();
+    state.mentionIndex = (state.mentionIndex - 1 + state.mentionItems.length) % state.mentionItems.length;
+    renderMentionBox();
+  } else if (e.key === "Escape") {
+    closeMentions();
   }
 }
-
-// ---------- 新建对话 ----------
-$("#newConv").addEventListener("click", async () => {
-  const r = await fetch("/api/conversations", { method: "POST" })
-    .then((x) => x.json());
-  currentConvId = r.conversation.id;
-  await loadConversations();
-  $("#messages").innerHTML = '<div class="empty-hint">新对话已建好，输入任务开聊吧。</div>';
-  $("#taskInput").focus();
-});
-
-// ---------- 工作区间：添加/删除/切换 ----------
-$("#wsSelect").addEventListener("change", () => {
-  currentWorkspace = $("#wsSelect").value;
-  localStorage.setItem(WS_KEY, currentWorkspace);
-  updateVisionHint();
-});
-
-function applyWorkspace(path) {
-  currentWorkspace = path;
-  localStorage.setItem(WS_KEY, path);
-  const sel = $("#wsSelect");
-  if (sel) sel.value = path;
-  updateVisionHint();
+function onTaskInput() {
+  const ta = $("#taskInput");
+  const pos = ta.selectionStart;
+  const before = ta.value.slice(0, pos);
+  const m = before.match(/@([^\s@]*)$/);
+  if (m) openMentions(m[1], pos - 1 - m[1].length);
+  else closeMentions();
 }
-
-$("#wsAdd").addEventListener("click", async () => {
-  const p = prompt("输入要添加的工作目录绝对路径（Agent 将可在此目录内读写/执行）：");
-  if (!p) return;
-  await _addWorkspace(p.trim());
-});
-
-// 一键把本工具所在项目目录（E:\workspace\agentUI 之类）加入工作区间
-$("#wsAddApp").addEventListener("click", async () => {
-  const r = await fetch("/api/workspaces").then((x) => x.json());
-  if (!r.app_dir) return;
-  if ((r.workspaces || []).includes(r.app_dir)) {
-    applyWorkspace(r.app_dir);
-    const hint = $("#wsHint");
-    hint.textContent = "✓ 本项目目录已在列表中，已切换过去";
-    hint.className = "ws-hint ok";
-    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
+async function ensureFileCandidates() {
+  if (state.mentionCache && state.mentionCache.ws === state.currentWorkspace)
+    return state.mentionCache.files;
+  const files = [];
+  const ignore = new Set([
+    "node_modules",
+    ".git",
+    "__pycache__",
+    "uploads",
+    ".workbuddy",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+    ".idea",
+  ]);
+  async function walk(path, depth) {
+    if (depth > 5 || files.length > 600) return;
+    const data = await fetchJson(API.fsList(state.currentWorkspace, path));
+    if (!data || data.error) return;
+    for (const it of data.items || []) {
+      const rel = path ? path + "/" + it.name : it.name;
+      if (it.type === "dir") {
+        if (ignore.has(it.name)) continue;
+        await walk(rel, depth + 1);
+      } else {
+        files.push(rel);
+      }
+    }
+  }
+  await walk("", 0);
+  state.mentionCache = { ws: state.currentWorkspace, files };
+  return files;
+}
+async function openMentions(query, start) {
+  const all = await ensureFileCandidates();
+  const q = query.toLowerCase();
+  const items = all.filter((f) => f.toLowerCase().includes(q)).slice(0, 50);
+  state.mentionItems = items;
+  state.mentionQuery = query;
+  state.mentionStart = start;
+  state.mentionIndex = 0;
+  if (!items.length) {
+    closeMentions();
     return;
   }
-  await _addWorkspace(r.app_dir);
-});
-
-async function _addWorkspace(p) {
-  const hint = $("#wsHint");
-  try {
-    const r = await fetch("/api/workspaces", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: p }),
-    }).then((x) => x.json());
-    if (r.ok) {
-      hint.textContent = "✓ " + r.message;
-      hint.className = "ws-hint ok";
-      await loadWorkspaces();
-      applyWorkspace(p);  // 加完直接切过去，省一步
-    } else {
-      hint.textContent = "✗ " + r.message;
-      hint.className = "ws-hint fail";
-    }
-  } catch (e) {
-    hint.textContent = "✗ 请求出错：" + e.message;
-    hint.className = "ws-hint fail";
-  } finally {
-    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
-  }
+  state.mentionOpen = true;
+  renderMentionBox();
+}
+function renderMentionBox() {
+  const box = $("#mentionBox");
+  box.innerHTML = "";
+  box.hidden = false;
+  state.mentionItems.forEach((f, i) => {
+    const div = document.createElement("div");
+    div.className = "mention-item" + (i === state.mentionIndex ? " active" : "");
+    const isDir = f.endsWith("/");
+    div.innerHTML = `<span class="mi-icon">${isDir ? "📁" : "📄"}</span>
+      <span>${escapeHtml(f.split("/").pop())}</span>
+      <span class="mi-path">${escapeHtml(f)}</span>`;
+    div.addEventListener("click", () => {
+      state.mentionIndex = i;
+      applyMention();
+    });
+    box.appendChild(div);
+  });
+}
+function applyMention() {
+  const rel = state.mentionItems[state.mentionIndex];
+  if (!rel) return closeMentions();
+  const ta = $("#taskInput");
+  const val = ta.value;
+  const pre = val.slice(0, state.mentionStart);
+  const post = val.slice(state.mentionStart + 1 + state.mentionQuery.length);
+  ta.value = pre + "@" + rel + " " + post;
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = pre.length + 1 + rel.length + 1;
+  closeMentions();
+}
+function closeMentions() {
+  state.mentionOpen = false;
+  state.mentionItems = [];
+  $("#mentionBox").hidden = true;
+  $("#mentionBox").innerHTML = "";
 }
 
-$("#wsDel").addEventListener("click", async () => {
-  const p = $("#wsSelect").value;
-  if (!p) return;
-  if (!confirm("移除工作区间「" + p + "」？\n（不会删除目录内文件，仅从本工具移除）")) return;
-  const hint = $("#wsHint");
-  try {
-    const r = await fetch("/api/workspaces", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: p }),
-    }).then((x) => x.json());
-    hint.textContent = (r.ok ? "✓ " : "✗ ") + r.message;
-    hint.className = "ws-hint " + (r.ok ? "ok" : "fail");
-    await loadWorkspaces();
-  } catch (e) {
-    hint.textContent = "✗ 请求出错：" + e.message;
-    hint.className = "ws-hint fail";
-  } finally {
-    setTimeout(() => { hint.textContent = ""; hint.className = "ws-hint"; }, 3000);
-  }
-});
-
-// ---------- 图片上传 ----------
-$("#imgBtn").addEventListener("click", () => $("#imgInput").click());
-
-$("#imgInput").addEventListener("change", (e) => {
-  const files = [...e.target.files];
+/* ---------- 图片 ---------- */
+function onImages(e) {
+  const files = Array.from(e.target.files || []);
   files.forEach((f) => {
-    if (!f.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const dataUrl = reader.result;
-      const comma = dataUrl.indexOf(",");
-      const meta = dataUrl.slice(0, comma);
-      const mime = meta.slice(meta.indexOf(":") + 1, meta.indexOf(";"));
-      const data = dataUrl.slice(comma + 1);
-      pendingImages.push({ filename: f.name, data, mime });
+      const b64 = reader.result.split(",")[1];
+      state.images.push({ filename: f.name, data: b64, mime: f.type });
       renderImgPreview();
     };
     reader.readAsDataURL(f);
   });
   e.target.value = "";
-});
-
+}
 function renderImgPreview() {
   const box = $("#imgPreview");
   box.innerHTML = "";
-  pendingImages.forEach((im, idx) => {
-    const wrap = document.createElement("div");
-    wrap.className = "thumb";
-    const img = document.createElement("img");
-    img.src = "data:" + im.mime + ";base64," + im.data;
-    const del = document.createElement("button");
-    del.className = "thumb-del";
-    del.textContent = "×";
-    del.title = "移除";
-    del.addEventListener("click", () => {
-      pendingImages.splice(idx, 1);
+  state.images.forEach((im, i) => {
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.innerHTML = `<img src="data:${im.mime};base64,${im.data}" />
+      <button class="thumb-del">✕</button>`;
+    thumb.querySelector(".thumb-del").addEventListener("click", () => {
+      state.images.splice(i, 1);
       renderImgPreview();
     });
-    wrap.append(img, del);
-    box.appendChild(wrap);
+    box.appendChild(thumb);
   });
 }
 
-refresh();
-loadConversations();
-loadWorkspaces();
-$("#modelSelect").addEventListener("change", updateVisionHint);
+/* ---------- 右栏文件树 ---------- */
+async function loadFileTree(ws, path, container) {
+  container = container || $("#fileTree");
+  const data = await fetchJson(API.fsList(ws, path));
+  if (!data || data.error) {
+    container.innerHTML = `<div class="tree-loading">${escapeHtml(data ? data.error : "加载失败")}</div>`;
+    return;
+  }
+  if (!path) {
+    container.innerHTML = "";
+    $("#fsPath").textContent = ws;
+  }
+  const items = (data.items || []).slice().sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  items.forEach((it) => {
+    const rel = path ? path + "/" + it.name : it.name;
+    const item = document.createElement("div");
+    item.className = "tree-item " + it.type;
+    const size = it.type === "file" ? (it.size >= 1024 ? (it.size / 1024).toFixed(0) + "K" : it.size + "B") : "";
+    item.innerHTML = `<span class="ti-icon">${it.type === "dir" ? "📁" : "📄"}</span>
+      <span class="ti-name">${escapeHtml(it.name)}</span>
+      <span class="ti-size">${size}</span>`;
+    if (it.type === "dir") {
+      let expanded = false;
+      item.addEventListener("click", async () => {
+        if (!expanded) {
+          expanded = true;
+          const child = document.createElement("div");
+          child.className = "tree-children";
+          child.innerHTML = '<div class="tree-loading">加载中…</div>';
+          item.appendChild(child);
+          await loadFileTree(ws, rel, child);
+        } else {
+          expanded = false;
+          const c = item.querySelector(".tree-children");
+          if (c) c.remove();
+        }
+      });
+    } else {
+      item.addEventListener("click", () => {
+        const ta = $("#taskInput");
+        const cur = ta.value;
+        ta.value = (cur ? cur + " " : "") + "@" + rel + " ";
+        ta.focus();
+      });
+    }
+    container.appendChild(item);
+  });
+}
+
+/* ---------- 启动 ---------- */
+// 设置弹层打开时刷新 providers
+$("#openSettings").addEventListener("click", () => {
+  renderProviders();
+});
+init();

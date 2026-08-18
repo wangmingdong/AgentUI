@@ -24,7 +24,7 @@ import re
 import subprocess
 
 from store import WORKSPACE_DIR, get_defaults, is_valid_workspace
-from gateway import chat_completion
+from gateway import chat_completion, chat_completion_stream
 from catalog import PROVIDERS
 
 MAX_ITER = 12
@@ -233,3 +233,109 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
         messages.append({"role": "user", "content": f"工具 {name} 的结果：\n{output}"})
 
     return steps
+
+
+def run_agent_stream(task: str, workspace: str = None, images: list = None,
+                     vision_mode: bool = False, files: list = None):
+    """流式版 run_agent：yield 事件字典的生成器。
+
+    事件类型：
+    - {"event":"llm_start","iter": i}               一轮 LLM 开始
+    - {"event":"token","text": "..."}              文本增量（逐块，用于打字机）
+    - {"event":"tool","tool": name,"args": args}   工具调用开始
+    - {"event":"tool_result","output": "..."}      工具执行结果
+    - {"event":"done","text": "..."}               最终回答（完整文本）
+    - {"event":"error","text": "..."}              出错
+
+    files: @引用的相对路径列表，会被读入并作为上下文注入 prompt（安全锁在 workspace 内）。
+    """
+    ws = workspace if is_valid_workspace(workspace) else WORKSPACE_DIR
+    images = images or []
+    files = files or []
+
+    # 任务文本：附带图片引用 + @文件引用
+    full_task = task
+    if images:
+        rels = [im.get("rel", "") for im in images if im.get("rel")]
+        if rels:
+            full_task += "\n\n[用户附带图片，已存入工作区 uploads/ 目录，相对路径：\n" + "\n".join(rels) + "\n]"
+            if not vision_mode:
+                full_task += "\n当前未开启「视觉输入」，模型看不到图本身；如需让模型看图，请改用支持多模态的模型并勾选「视觉输入」。你可用 read_file/list_dir 处理这些文件。"
+    if files:
+        refs = []
+        for f in files:
+            try:
+                p = _safe_path(f, ws)
+            except ValueError as e:
+                refs.append(f"[引用文件 {f} 越界被忽略：{e}]")
+                continue
+            if not os.path.isfile(p):
+                refs.append(f"[引用文件 {f} 不存在]")
+                continue
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+            except Exception as e:
+                refs.append(f"[引用文件 {f} 读取失败：{e}]")
+                continue
+            if len(content) > 8000:
+                content = content[:8000] + "\n...（内容过长已截断）"
+            refs.append(f"### 引用文件：{f}\n```\n{content}\n```")
+        if refs:
+            full_task += "\n\n[用户引用了以下工作区文件作为上下文]\n" + "\n\n".join(refs)
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(workspace=os.path.realpath(ws))}]
+    if vision_mode and images:
+        content = [{"type": "text", "text": full_task}]
+        for im in images:
+            if im.get("data") and im.get("mime"):
+                content.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": full_task})
+
+    default_provider, default_model = get_defaults()
+
+    if vision_mode and images:
+        info = PROVIDERS.get(default_provider, {})
+        vision_models = info.get("vision_models") or []
+        if vision_models and default_model not in vision_models:
+            yield {"event": "error", "text": (
+                f"当前默认模型「{default_model}」不支持图片输入。"
+                f"请在设置页换一个支持视觉的模型（如 {', '.join(vision_models)}），"
+                f"或取消勾选「视觉输入」让 Agent 把图片当文件处理。")}
+            return
+
+    for i in range(MAX_ITER):
+        payload = {"model": default_model, "messages": messages, "temperature": 0.3, "fallback": True}
+        if vision_mode and images:
+            payload["fallback"] = False
+
+        yield {"event": "llm_start", "iter": i}
+        full_content = ""
+        err_text = None
+        for piece in chat_completion_stream(payload):
+            if piece.startswith("[错误]"):
+                err_text = piece
+                break
+            full_content += piece
+            yield {"event": "token", "text": piece}
+        if err_text:
+            yield {"event": "error", "text": err_text}
+            break
+
+        call = _extract_call(full_content)
+        if call is None:
+            yield {"event": "done", "text": full_content}
+            break
+
+        name, args = call
+        yield {"event": "tool", "tool": name, "args": args}
+        try:
+            output = _run_tool(name, args, ws)
+        except ValueError as e:
+            output = f"[拒绝] {e}"
+        yield {"event": "tool_result", "output": output}
+
+        messages.append({"role": "assistant", "content": full_content})
+        messages.append({"role": "user", "content": f"工具 {name} 的结果：\n{output}"})

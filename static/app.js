@@ -198,6 +198,40 @@ async function exportCurrentConv() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ---------- 通用确认弹窗（替代原生 confirm） ---------- */
+function showConfirm(opts = {}) {
+  return new Promise((resolve) => {
+    const {
+      title = "确认",
+      message = "",
+      okText = "确定",
+      cancelText = "取消",
+      danger = false,
+    } = opts;
+    const modal = $("#confirmModal");
+    $("#confirmTitle").textContent = title;
+    $("#confirmMessage").textContent = message;
+    const okBtn = $("#confirmOk");
+    okBtn.textContent = okText;
+    okBtn.className = "btn small" + (danger ? " danger" : " primary");
+    $("#confirmCancel").textContent = cancelText;
+    let settled = false;
+    const onKey = (e) => { if (e.key === "Escape") settle(false); };
+    const settle = (val) => {
+      if (settled) return;
+      settled = true;
+      modal.hidden = true;
+      document.removeEventListener("keydown", onKey);
+      resolve(val);
+    };
+    okBtn.onclick = () => settle(true);
+    $("#confirmCancel").onclick = () => settle(false);
+    $("#confirmMask").onclick = () => settle(false);
+    document.addEventListener("keydown", onKey);
+    modal.hidden = false;
+  });
+}
+
 function bindEvents() {
   $("#newConv").addEventListener("click", newConversation);
   $("#convSearch").addEventListener("input", filterConvs);
@@ -508,7 +542,13 @@ function renderConvItem(c) {
   span.addEventListener("dblclick", () => startRename(c, span, item));
   del.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (!confirm("删除该对话？")) return;
+    const ok = await showConfirm({
+      title: "删除对话",
+      message: `确定删除「${c.title || "新对话"}」吗？删除后不可恢复。`,
+      okText: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch(API.conv(c.id), { method: "DELETE" });
     if (state.currentConvId === c.id) {
       state.currentConvId = null;
@@ -634,7 +674,13 @@ function buildMsgActions(m, idx) {
   del.className = "mabtn danger";
   del.textContent = "删除";
   del.addEventListener("click", async () => {
-    if (!confirm("删除这条消息？")) return;
+    const ok = await showConfirm({
+      title: "删除消息",
+      message: "确定删除这条消息吗？删除后不可恢复。",
+      okText: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await postJson("/api/message/delete", { conversation_id: state.currentConvId, index: idx });
     const conv = await fetchJson(API.conv(state.currentConvId));
     renderMessages(conv.conversation.messages || []);

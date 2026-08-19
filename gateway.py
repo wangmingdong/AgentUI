@@ -125,11 +125,28 @@ def _fallback(payload: dict):
             errors.append(f"{mid}->{code}:{err}")
         except Exception as e:
             errors.append(f"{mid}->{e}")
+    # 给错误分类，输出人话建议而不是纯 HTTP 码
+    hints = []
+    has_1010 = any("1010" in e or "access denied" in e.lower() for e in errors)
+    has_403 = any("->403:" in e for e in errors)
+    has_429 = any("->429:" in e for e in errors)
+    if has_1010 or has_403:
+        hints.append(
+            "OpenCode Zen 匿名通道被拒绝访问（403 / error code 1010）。"
+            "这通常是 Cloudflare 风控或该免费档对当前 IP/匿名用户关闭了入口。"
+        )
+    if has_429:
+        hints.append("匿名通道也触发限流（429），免费额度已用完或请求太频繁。")
+    if not hints:
+        hints.append("兜底通道（OpenCode Zen 匿名）所有免费模型均不可用，可能免费档已下线或网络受限。")
+
+    suggestion = (
+        "建议：① 在设置页把默认模型换回你已配 token 的平台（如商汤 sensenova-6.8-flash-lite），"
+        "避免走到匿名兜底；② 若是商汤 429，可等几分钟再试；③ 给 OpenCode Zen 绑定 GitHub 账号拿 Key 后走鉴权通道。"
+    )
+
     return (502,
-            {"error": {"message":
-               "兜底通道（OpenCode Zen 匿名）所有免费模型均不可用。" +
-               "可能该免费档已被下线，或你当前的网络访问被限制。" +
-               "建议：在设置页选一个你已配置 token 的平台作为默认模型，或点「测连通」确认网络。" +
+            {"error": {"message": " ".join(hints) + " " + suggestion +
                " 详情: " + " | ".join(errors)}},
             FALLBACK_PROVIDER)
 
@@ -308,4 +325,18 @@ def chat_completion_stream(payload: dict):
             last_err = f"{pk}->{e}"
             continue
 
-    yield f"[错误] 流式请求失败（{last_err}）"
+    # 最终兜底也失败：给人话建议
+    detail = last_err
+    advice = ""
+    if "1010" in detail or "403" in detail:
+        advice = "OpenCode Zen 匿名通道被 403 / 1010 拒绝（Cloudflare 风控或匿名入口关闭）。"
+    if "429" in detail:
+        advice += (" " if advice else "") + "平台或兜底通道触发限流（429）。"
+    if not advice:
+        advice = "主平台与兜底通道均调用失败。"
+    yield (
+        "[错误] " + advice +
+        " 建议：① 在设置页把默认模型换回已配 token 的平台（如商汤 sensenova-6.8-flash-lite）；"
+        "② 若刚触发 429，等几分钟再试；③ 给 OpenCode Zen 绑 GitHub Key 走鉴权通道。"
+        f" 详情: {detail}"
+    )

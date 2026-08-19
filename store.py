@@ -27,7 +27,7 @@ def _default_state():
     return {
         "tokens": {},          # {provider_key: {"api_key": "..."}}
         "default_provider": "sensenova",
-        "default_model": "sensenova-6.8-flash-lite",   # 商汤 6.8 flash lite 免费且唯一支持看图
+        "default_model": "sensenova-6.8-flash-lite",   # 商汤 6.8 flash lite 免费、看图、流式、工具调用都支持；限额 1500/5h 比 deepseek-v4-flash 更宽松
         "usage": {},           # {provider_key: {"calls": n, "tokens": n}}
         "user_workspaces": [], # 用户额外添加的工作目录（绝对路径）
     }

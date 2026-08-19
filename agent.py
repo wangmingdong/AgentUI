@@ -208,8 +208,11 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
 
         code, j, used = chat_completion(payload)
         if code != 200:
-            steps.append({"type": "error", "text": f"模型调用失败（{used}）: " +
-                          json.dumps(j, ensure_ascii=False)[:400]})
+            err = json.dumps(j, ensure_ascii=False)[:500]
+            text = f"模型调用失败（{used}）: {err}"
+            if "OpenCode Zen" in err or "兜底" in err or "1010" in err:
+                text += "\n\n👉 建议到设置页把默认模型换回已配 token 的平台（如商汤 sensenova-6.8-flash-lite），避免走匿名兜底通道。"
+            steps.append({"type": "error", "text": text})
             break
 
         content = (j.get("choices", [{}])[0].get("message", {}).get("content", "") or "")

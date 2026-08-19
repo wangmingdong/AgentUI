@@ -53,6 +53,8 @@ SYSTEM_PROMPT = """你是一个运行在用户本地的编程 Agent。你可以�
 4. 用中文和用户交流。
 5. 用户可能附带图片（已存入工作区的 uploads/ 目录）。若任务是关于图片的，
    可用 read_file 查看或结合上下文处理；若当前模型支持图像理解，图片已直接传入。
+6. 当你已经获得足够信息时，必须立即停止调用工具，直接输出清晰、完整的最终回答/总结。
+   不要只罗列中间步骤或工具结果，用户需要看到可读的结论、代码解释或操作结果。
 """
 
 TOOL_NAMES = {"read_file", "write_file", "run_command", "list_dir"}
@@ -195,6 +197,8 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
             })
             return steps
 
+    done = False
+    used_provider = default_provider
     for i in range(MAX_ITER):
         payload = {
             "model": default_model,
@@ -207,6 +211,7 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
             payload["fallback"] = False
 
         code, j, used = chat_completion(payload)
+        used_provider = used
         if code != 200:
             err = json.dumps(j, ensure_ascii=False)[:500]
             text = f"模型调用失败（{used}）: {err}"
@@ -220,7 +225,8 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
 
         if call is None:
             steps.append({"type": "llm", "text": content, "provider": used})
-            steps.append({"type": "done", "text": content})
+            steps.append({"type": "done", "text": content or "（模型未返回可见文本）"})
+            done = True
             break
 
         name, args = call
@@ -234,6 +240,32 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
         # 把工具结果作为 user 消息回灌，让模型继续
         messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": f"工具 {name} 的结果：\n{output}"})
+
+    # 若达到最大轮数仍未给出结论，强制让模型基于已有信息做最终总结
+    if not done:
+        messages.append({
+            "role": "user",
+            "content": "已达到最大思考轮数。请基于你已经收集到的信息，直接给出最终回答/总结，不要调用任何工具。"
+        })
+        payload = {
+            "model": default_model,
+            "messages": messages,
+            "temperature": 0.3,
+            "fallback": True,
+        }
+        if vision_mode and images:
+            payload["fallback"] = False
+        code, j, used = chat_completion(payload)
+        if code == 200:
+            content = (j.get("choices", [{}])[0].get("message", {}).get("content", "") or "")
+            steps.append({"type": "llm", "text": content, "provider": used})
+            steps.append({"type": "done", "text": content or "（模型未返回可见文本，请查看右侧执行步骤）"})
+        else:
+            err = json.dumps(j, ensure_ascii=False)[:500]
+            text = f"模型调用失败（{used}）: {err}"
+            if "OpenCode Zen" in err or "兜底" in err or "1010" in err:
+                text += "\n\n👉 建议到设置页把默认模型换回已配 token 的平台（如商汤 sensenova-6.8-flash-lite），避免走匿名兜底通道。"
+            steps.append({"type": "error", "text": text})
 
     return steps
 
@@ -309,6 +341,7 @@ def run_agent_stream(task: str, workspace: str = None, images: list = None,
                 f"或取消勾选「视觉输入」让 Agent 把图片当文件处理。")}
             return
 
+    done = False
     for i in range(MAX_ITER):
         payload = {"model": default_model, "messages": messages, "temperature": 0.3, "fallback": True}
         if vision_mode and images:
@@ -327,9 +360,14 @@ def run_agent_stream(task: str, workspace: str = None, images: list = None,
             yield {"event": "error", "text": err_text}
             break
 
+        # 把本轮 LLM 输出也记录到 steps，便于后端兜底提取最后一段回复
+        if full_content:
+            yield {"event": "llm", "text": full_content, "provider": default_provider}
+
         call = _extract_call(full_content)
         if call is None:
-            yield {"event": "done", "text": full_content}
+            yield {"event": "done", "text": full_content or "（模型未返回可见文本）"}
+            done = True
             break
 
         name, args = call
@@ -342,3 +380,26 @@ def run_agent_stream(task: str, workspace: str = None, images: list = None,
 
         messages.append({"role": "assistant", "content": full_content})
         messages.append({"role": "user", "content": f"工具 {name} 的结果：\n{output}"})
+
+    # 达到最大轮数仍未给出结论：强制让模型基于已有信息做最终总结
+    if not done:
+        messages.append({
+            "role": "user",
+            "content": "已达到最大思考轮数。请基于你已经收集到的信息，直接给出最终回答/总结，不要调用任何工具。"
+        })
+        payload = {"model": default_model, "messages": messages, "temperature": 0.3, "fallback": True}
+        if vision_mode and images:
+            payload["fallback"] = False
+        yield {"event": "llm_start", "iter": "final"}
+        full_content = ""
+        err_text = None
+        for piece in chat_completion_stream(payload):
+            if piece.startswith("[错误]"):
+                err_text = piece
+                break
+            full_content += piece
+            yield {"event": "token", "text": piece}
+        if err_text:
+            yield {"event": "error", "text": err_text}
+        else:
+            yield {"event": "done", "text": full_content or "（模型未返回可见文本，请查看右侧执行步骤）"}

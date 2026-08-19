@@ -117,6 +117,8 @@ def _agent_summary(steps):
 def _event_to_step(ev):
     """把流式事件映射回 step 结构（token 事件忽略，前端已实时显示）。"""
     t = ev.get("event")
+    if t == "llm":
+        return {"type": "llm", "text": ev.get("text"), "provider": ev.get("provider")}
     if t == "tool":
         return {"type": "tool", "tool": ev.get("tool"), "args": ev.get("args"), "output": ""}
     if t == "tool_result":

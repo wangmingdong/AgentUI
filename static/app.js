@@ -24,8 +24,7 @@ const state = {
   workspaces: [],
   currentWorkspace: "",
   images: [], // {filename, data}
-  running: false,
-  abort: null,
+  streams: new Map(), // convId -> {convId, abort, text, steps[], dom, finished}
   toolCards: [], // 右栏步骤回填
   mentionCache: null, // {ws, files:[]}
   mentionOpen: false,
@@ -34,6 +33,21 @@ const state = {
   mentionStart: 0,
   mentionQuery: "",
 };
+
+/* ---------- 多对话运行状态 ---------- */
+function isRunningConv(convId) {
+  const c = state.streams.get(convId);
+  return !!(c && !c.finished);
+}
+function refreshRunButtons() {
+  const running = isRunningConv(state.currentConvId);
+  const runBtn = $("#runAgent");
+  const stopBtn = $("#stopAgent");
+  if (runBtn) runBtn.hidden = running;
+  if (stopBtn) stopBtn.hidden = !running;
+  const st = $("#agentStatus");
+  if (st) st.textContent = running ? "Agent 运行中…（可点停止）" : "";
+}
 
 /* ---------- 工具 ---------- */
 async function fetchJson(url) {
@@ -141,6 +155,7 @@ async function init() {
   if (state.currentWorkspace) loadFileTree(state.currentWorkspace, "");
   renderTokenStatus();
   updateVisionHint();
+  refreshRunButtons();
 }
 
 /* ---------- 主题（深色 / 浅色 / 跟随系统） ---------- */
@@ -531,11 +546,22 @@ async function newConversation() {
   await selectConv(conv.conversation.id);
 }
 async function selectConv(id) {
+  // 解绑旧对话正在跑的流（让它后台继续，但不再写即将销毁的 DOM）
+  const old = state.streams.get(state.currentConvId);
+  if (old) old.dom = null;
   state.currentConvId = id;
   $$(".conv-item").forEach((x) => x.classList.remove("active"));
   const conv = await fetchJson(API.conv(id));
   renderMessages(conv.conversation.messages || []);
+  // 若切到正在跑的对话，把实时流式行接回视图；否则清空右栏步骤
+  const ctx = state.streams.get(id);
+  if (ctx && !ctx.finished) {
+    attachStreamDom(id);
+  } else {
+    $("#stepList").innerHTML = "";
+  }
   await loadConversations();
+  refreshRunButtons();
 }
 
 /* ---------- 消息渲染 ---------- */
@@ -681,7 +707,7 @@ function appendLocalUser(task, images) {
   box.appendChild(row);
   box.scrollTop = box.scrollHeight;
 }
-function appendLocalAssistant() {
+function makeAssistantRow() {
   const box = $("#messages");
   const row = document.createElement("div");
   row.className = "msg-row msg-bot";
@@ -701,29 +727,52 @@ function appendLocalAssistant() {
   box.scrollTop = box.scrollHeight;
   return { row, inner, textSpan, cursor };
 }
+function appendLocalAssistant() {
+  return makeAssistantRow();
+}
 
-/* ---------- 运行 Agent（流式） ---------- */
-function setRunning(r) {
-  state.running = r;
-  $("#runAgent").hidden = r;
-  $("#stopAgent").hidden = !r;
-  $("#agentStatus").textContent = r ? "Agent 运行中…（可点停止）" : "";
+/* 切回正在运行的对话时，把实时流式行接回视图（重建文本+步骤） */
+function attachStreamDom(convId) {
+  const ctx = state.streams.get(convId);
+  if (!ctx || ctx.finished) return;
+  const a = makeAssistantRow();
+  ctx.dom = a;
+  a.textSpan.textContent = ctx.text || "";
+  const stepList = $("#stepList");
+  stepList.innerHTML = "";
+  ctx.toolCards = [];
+  (ctx.steps || []).forEach((s) => {
+    const card = renderStepCard(s, true);
+    stepList.appendChild(card);
+    if (s.type === "tool") ctx.toolCards.push(card);
+  });
+  switchCtx("steps");
 }
+
+/* ---------- 运行 Agent（流式，支持多对话并行） ---------- */
 function stopAgent() {
-  if (state.abort) state.abort.abort();
+  const ctx = state.streams.get(state.currentConvId);
+  if (ctx && ctx.abort) ctx.abort.abort();
 }
-async function streamAgent(body, a) {
-  state.abort = new AbortController();
+async function streamAgent(body, convId) {
+  const ctx = state.streams.get(convId);
+  if (!ctx) return;
+  const abort = new AbortController();
+  ctx.abort = abort;
   try {
     const resp = await fetch(API.agentStream, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: state.abort.signal,
+      signal: abort.signal,
     });
     if (!resp.ok) {
-      a.textSpan.textContent = "⚠️ 服务返回 " + resp.status;
-      a.cursor.remove();
+      if (ctx.dom) {
+        ctx.dom.textSpan.textContent = "⚠️ 服务返回 " + resp.status;
+        ctx.dom.cursor.remove();
+      }
+      ctx.finished = true;
+      refreshRunButtons();
       return;
     }
     const reader = resp.body.getReader();
@@ -742,23 +791,26 @@ async function streamAgent(body, a) {
           .filter((l) => l.startsWith("data:"))
           .forEach((l) => {
             const d = l.slice(5).trim();
-            if (d) handleEvent(JSON.parse(d), a);
+            if (d) handleEvent(JSON.parse(d), convId);
           });
       }
     }
   } catch (e) {
     if (e.name === "AbortError") {
-      a.textSpan.textContent += "\n\n[已停止]";
+      if (ctx.dom) ctx.dom.textSpan.textContent += "\n\n[已停止]";
     } else {
-      a.textSpan.textContent = "⚠️ 请求出错：" + e.message;
+      if (ctx.dom) ctx.dom.textSpan.textContent = "⚠️ 请求出错：" + e.message;
     }
   } finally {
-    a.cursor.remove();
+    if (ctx.dom) ctx.dom.cursor.remove();
+    ctx.finished = true;
+    refreshRunButtons();
   }
 }
 
 async function runAgent() {
-  if (state.running) return;
+  const convId = state.currentConvId;
+  if (!convId || isRunningConv(convId)) return;
   const raw = $("#taskInput").value.trim();
   if (!raw) return;
   const files = extractMentions(raw);
@@ -774,88 +826,107 @@ async function runAgent() {
 
   appendLocalUser(task, imagesToSend);
   const a = appendLocalAssistant();
-  state.toolCards = [];
+  state.streams.set(convId, { convId, abort: null, text: "", steps: [], toolCards: [], dom: a, finished: false });
   $("#stepList").innerHTML = "";
   switchCtx("steps");
-  setRunning(true);
+  refreshRunButtons();
   const body = {
     task,
     workspace: state.currentWorkspace,
     vision_mode: $("#visionChk").checked,
     files,
     images: imagesToSend,
-    conversation_id: state.currentConvId || "",
+    conversation_id: convId || "",
   };
-  await streamAgent(body, a);
-  setRunning(false);
+  await streamAgent(body, convId);
 }
 
 async function regenerate() {
-  if (state.running || !state.currentConvId) return;
+  const convId = state.currentConvId;
+  if (!convId || isRunningConv(convId)) return;
   const a = appendLocalAssistant();
-  state.toolCards = [];
+  state.streams.set(convId, { convId, abort: null, text: "", steps: [], toolCards: [], dom: a, finished: false });
   $("#stepList").innerHTML = "";
   switchCtx("steps");
-  setRunning(true);
+  refreshRunButtons();
   const body = {
     task: "",
     workspace: state.currentWorkspace,
     vision_mode: $("#visionChk").checked,
     files: [],
     images: [],
-    conversation_id: state.currentConvId,
+    conversation_id: convId,
     regenerate: true,
   };
-  await streamAgent(body, a);
-  setRunning(false);
+  await streamAgent(body, convId);
   state.images = [];
   renderImgPreview();
 }
-function handleEvent(ev, a) {
+function handleEvent(ev, convId) {
+  const ctx = state.streams.get(convId);
+  if (!ctx) return;
+  const dom = ctx.dom;
   switch (ev.event) {
     case "llm_start":
       break;
     case "token":
-      a.textSpan.textContent += ev.text;
-      $("#messages").scrollTop = $("#messages").scrollHeight;
+      ctx.text += ev.text;
+      if (dom) {
+        dom.textSpan.textContent = ctx.text;
+        $("#messages").scrollTop = $("#messages").scrollHeight;
+      }
       break;
     case "tool":
       switchCtx("steps");
-      {
+      ctx.steps.push({ type: "tool", tool: ev.tool, args: ev.args });
+      if (dom) {
         const card = renderStepCard({ type: "tool", tool: ev.tool, args: ev.args }, true);
         $("#stepList").appendChild(card);
-        state.toolCards.push(card);
+        ctx.toolCards.push(card);
       }
       break;
-    case "tool_result": {
-      const card = state.toolCards.shift();
-      if (card) {
-        const out = card.querySelector("pre");
-        out.style.display = "block";
-        out.textContent = ev.output || "";
+    case "tool_result":
+      ctx.steps.push({ type: "tool_result", output: ev.output });
+      if (dom) {
+        const card = ctx.toolCards.shift();
+        if (card) {
+          const out = card.querySelector("pre");
+          out.style.display = "block";
+          out.textContent = ev.output || "";
+        }
       }
       break;
-    }
     case "done":
-      a.inner.innerHTML = renderMD(ev.text || "");
-      highlightWithin(a.inner);
+      if (dom) {
+        dom.inner.innerHTML = renderMD(ev.text || "");
+        highlightWithin(dom.inner);
+      }
+      ctx.steps.push({ type: "done" });
       {
         const card = renderStepCard({ type: "done" }, true);
         $("#stepList").appendChild(card);
       }
       break;
     case "error":
-      a.inner.innerHTML = renderMD("⚠️ " + (ev.text || "出错"));
-      highlightWithin(a.inner);
+      if (dom) {
+        dom.inner.innerHTML = renderMD("⚠️ " + (ev.text || "出错"));
+        highlightWithin(dom.inner);
+      }
+      ctx.steps.push({ type: "error", text: ev.text });
       {
         const card = renderStepCard({ type: "error", text: ev.text }, true);
         $("#stepList").appendChild(card);
       }
       break;
     case "saved":
-      state.currentConvId = ev.conversation_id;
-      renderMessages(ev.messages);
+      // 仅当完成的是当前正在查看的对话时才刷新视图，避免后台任务完成强行切走用户视线
+      if (ev.conversation_id === state.currentConvId) {
+        state.currentConvId = ev.conversation_id;
+        renderMessages(ev.messages);
+      }
       loadConversations();
+      state.streams.delete(convId);
+      refreshRunButtons();
       break;
   }
 }

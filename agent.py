@@ -35,10 +35,14 @@ SYSTEM_PROMPT = """你是一个运行在用户本地的编程 Agent。你可以�
 {workspace}
 所有相对路径都相对于它。
 
-当你需要使用工具时，严格按以下格式输出一个调用块（一次只调用一个）：
+当你需要使用工具时，必须严格按以下格式输出一个调用块：
 <call>
 {{"name": "工具名", "args": {{参数}}}}
 </call>
+
+重要约束：
+- 一次只调用一个工具，不要把多个调用拼在一起，也不要输出 JSON 数组。
+- 必须完整包裹在 <call>...</call> 标签内；只输出裸 JSON 会被视为最终回答，不会执行工具。
 
 可用工具：
 - read_file: {{"path": "相对路径"}} -> 读取文件内容
@@ -126,17 +130,103 @@ def _run_tool(name: str, args: dict, base: str) -> str:
     return f"[错误] 未知工具: {name}"
 
 
+def _extract_json_objects(text: str):
+    """从文本中安全提取所有顶层 JSON 对象/数组（支持嵌套花括号），返回字符串列表。"""
+    results = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "{":
+            depth = 0
+            in_str = False
+            esc = False
+            start = i
+            while i < n:
+                ch = text[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            results.append(text[start:i + 1])
+                            break
+                i += 1
+            i += 1
+        elif text[i] == "[":
+            depth = 0
+            in_str = False
+            esc = False
+            start = i
+            while i < n:
+                ch = text[i]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "[":
+                        depth += 1
+                    elif ch == "]":
+                        depth -= 1
+                        if depth == 0:
+                            results.append(text[start:i + 1])
+                            break
+                i += 1
+            i += 1
+        else:
+            i += 1
+    return results
+
+
 def _extract_call(text: str):
-    """从模型输出里提取第一个 <call>...</call> 块，返回 (name, args) 或 None。"""
+    """从模型输出里提取第一个工具调用，返回 (name, args) 或 None。
+
+    兼容三种模型输出形态：
+    1. 规范格式：<call>{"name":"...","args":{...}}</call>
+    2. 裸 JSON 对象：{"name":"...","args":{...}}
+    3. JSON 数组或连写多个对象：[{...},{...}] 或 {...}{...}{...}
+       只取第一个合法工具调用，其余忽略（一次只执行一个工具）。
+    """
+    # 1. 优先规范 <call> 格式
     m = re.search(r"<call>\s*(\{.*?\})\s*</call>", text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(1))
-        if obj.get("name") in TOOL_NAMES:
-            return obj["name"], obj.get("args", {})
-    except Exception:
-        return None
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if obj.get("name") in TOOL_NAMES:
+                return obj["name"], obj.get("args", {})
+        except Exception:
+            pass
+
+    # 2. 扫描文本中所有 JSON 对象/数组
+    for raw in _extract_json_objects(text):
+        try:
+            obj_or_list = json.loads(raw)
+        except Exception:
+            continue
+        candidates = []
+        if isinstance(obj_or_list, dict):
+            candidates.append(obj_or_list)
+        elif isinstance(obj_or_list, list):
+            candidates.extend(obj_or_list)
+        for obj in candidates:
+            if isinstance(obj, dict) and obj.get("name") in TOOL_NAMES:
+                return obj["name"], obj.get("args", {})
+
     return None
 
 

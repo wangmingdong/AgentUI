@@ -140,7 +140,29 @@ def _extract_call(text: str):
     return None
 
 
-def run_agent(task: str, workspace: str = None, images: list = None, vision_mode: bool = False):
+def _history_to_messages(history):
+    """把存储的对话历史转成 OpenAI 消息格式（只取 role/content，过滤空内容）。
+
+    历史里 assistant 消息的 content 是对话最终总结文本，user 消息是原始提问，
+    足够支撑多轮上下文；工具调用的中间过程不回灌，避免上下文爆炸。
+    最多取最近 30 条，防止超长。
+    """
+    if not history:
+        return []
+    out = []
+    for m in history[-30:]:
+        role = m.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        out.append({"role": role, "content": content})
+    return out
+
+
+def run_agent(task: str, workspace: str = None, images: list = None,
+              vision_mode: bool = False, history: list = None):
     """
     执行一个任务，返回步骤列表（供 UI 展示）：
     每步: {"type": "llm"|"tool"|"done", "text", "tool", "args", "output"}
@@ -148,6 +170,7 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
     workspace: 当前工作区间绝对路径（必须是允许区间之一，否则退回主工作区）
     images:    已存盘的图片列表 [{"rel":..., "data":base64, "mime":...}]
     vision_mode: 是否把图片作为多模态内容直接传给模型（需模型支持视觉）
+    history:   本轮之前的对话历史（store 里的 messages），用于多轮上下文
     """
     # 校验工作区间，非法则退回主工作区
     ws = workspace if is_valid_workspace(workspace) else WORKSPACE_DIR
@@ -162,10 +185,14 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
             if not vision_mode:
                 full_task += "\n当前未开启「视觉输入」，模型看不到图本身；如需让模型看图，请改用支持多模态的模型并勾选「视觉输入」。你可用 read_file/list_dir 处理这些文件。"
 
-    # 构造消息
+    # 构造消息：系统提示 + 历史上下文 + 当前任务
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(workspace=os.path.realpath(ws))},
     ]
+    # 历史上下文（多轮记忆）：若历史最后一条已是当前 user 提问（重生成场景）则跳过，避免重复
+    hist = _history_to_messages(history)
+    if hist and not (hist[-1]["role"] == "user" and hist[-1]["content"] == full_task):
+        messages.extend(hist)
     if vision_mode and images:
         # 多模态：把图片以 data URL 内联进首条 user 消息
         content = [{"type": "text", "text": full_task}]
@@ -271,7 +298,7 @@ def run_agent(task: str, workspace: str = None, images: list = None, vision_mode
 
 
 def run_agent_stream(task: str, workspace: str = None, images: list = None,
-                     vision_mode: bool = False, files: list = None):
+                     vision_mode: bool = False, files: list = None, history: list = None):
     """流式版 run_agent：yield 事件字典的生成器。
 
     事件类型：
@@ -320,6 +347,10 @@ def run_agent_stream(task: str, workspace: str = None, images: list = None,
             full_task += "\n\n[用户引用了以下工作区文件作为上下文]\n" + "\n\n".join(refs)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT.format(workspace=os.path.realpath(ws))}]
+    # 历史上下文（多轮记忆）：若历史最后一条已是当前提问（重生成场景）则跳过，避免重复
+    hist = _history_to_messages(history)
+    if hist and not (hist[-1]["role"] == "user" and hist[-1]["content"] == full_task):
+        messages.extend(hist)
     if vision_mode and images:
         content = [{"type": "text", "text": full_task}]
         for im in images:

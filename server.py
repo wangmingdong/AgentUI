@@ -397,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
                     cid = conv["id"]
                 attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
                 store.append_message(cid, "user", task, attachments=attachments)
+            # 历史上下文：regenerate 时历史已含当前提问；否则取除当前提问外的全部
+            if regenerate:
+                history = (conv["messages"] if conv else [])
+            else:
+                history = (conv["messages"][:-1] if conv and len(conv["messages"]) > 1 else [])
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -405,7 +410,8 @@ class Handler(BaseHTTPRequestHandler):
             events = []
             try:
                 for ev in agent.run_agent_stream(task, workspace=ws, images=saved_images,
-                                                 vision_mode=vision_mode, files=files):
+                                                 vision_mode=vision_mode, files=files,
+                                                 history=history):
                     events.append(ev)
                     data = json.dumps(ev, ensure_ascii=False).encode("utf-8")
                     try:
@@ -459,9 +465,10 @@ class Handler(BaseHTTPRequestHandler):
             # 用户消息带上图片附件（仅存展示所需 rel/name/ws）
             attachments = [{"rel": s["rel"], "name": s["name"], "ws": ws} for s in saved_images]
             store.append_message(cid, "user", task, attachments=attachments)
+            history = (conv["messages"][:-1] if conv and len(conv["messages"]) > 1 else [])
             try:
                 steps = agent.run_agent(task, workspace=ws, images=saved_images,
-                                        vision_mode=vision_mode)
+                                        vision_mode=vision_mode, history=history)
             except Exception as e:
                 steps = [{"type": "error", "text": f"Agent 执行异常：{e}"}]
             conv = store.append_message(cid, "assistant", _agent_summary(steps), steps)

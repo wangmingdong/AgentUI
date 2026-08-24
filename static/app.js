@@ -21,6 +21,7 @@ const API = {
 const state = {
   providers: [],
   currentConvId: null,
+  messages: [], // 当前对话的消息列表（用于计算上下文长度）
   workspaces: [],
   currentWorkspace: "",
   images: [], // {filename, data}
@@ -607,6 +608,8 @@ async function selectConv(id) {
 /* ---------- 消息渲染 ---------- */
 function renderMessages(messages) {
   const box = $("#messages");
+  state.messages = messages || [];
+  updateCtxLen();
   box.innerHTML = "";
   if (!messages.length) {
     box.innerHTML = '<div class="empty-hint">还没有对话，点左侧「＋ 新建对话」开始，或直接输入任务。</div>';
@@ -614,6 +617,44 @@ function renderMessages(messages) {
   }
   messages.forEach((m, i) => box.appendChild(renderMessage(m, i)));
   box.scrollTop = box.scrollHeight;
+}
+
+/* 估算 token 数：中文（含日文汉字）约 1 字 = 1 token，其它非空白字符约 4 字 = 1 token */
+function estimateTokens(text) {
+  if (!text) return 0;
+  let cjk = 0, other = 0;
+  for (const ch of text) {
+    if (/[㐀-䶿一-鿿豈-﫿]/.test(ch)) cjk++;
+    else if (!/\s/.test(ch)) other++;
+  }
+  return cjk + Math.ceil(other / 4);
+}
+
+/* 顶栏上下文长度指示：消息数 / 轮数 / 估算 token */
+function updateCtxLen() {
+  const el = $("#ctxLen");
+  if (!el) return;
+  const msgs = state.messages || [];
+  if (!msgs.length) {
+    el.textContent = "—";
+    el.className = "ctx-len";
+    el.title = "当前对话暂无消息";
+    return;
+  }
+  let chars = 0, toks = 0;
+  msgs.forEach((m) => {
+    const c = m.content || "";
+    chars += c.length;
+    toks += estimateTokens(c);
+  });
+  const turns = msgs.filter((m) => m.role === "user").length;
+  // 接近很多模型 8k~32k 上下文窗口时给个温和提醒（阈值取 6000）
+  const warn = toks > 6000;
+  el.className = "ctx-len" + (warn ? " warn" : "");
+  el.innerHTML = `上下文 <b>${toks.toLocaleString()}</b> tok · ${msgs.length} 条 · ${turns} 轮`;
+  el.title =
+    `当前对话历史累计（估算）：约 ${toks.toLocaleString()} token、${chars.toLocaleString()} 字符、` +
+    `${msgs.length} 条消息、${turns} 轮提问。\n实际请求还会加上系统提示与工具结果；精确消耗以模型侧为准。`;
 }
 function renderMessage(m, idx) {
   const row = document.createElement("div");

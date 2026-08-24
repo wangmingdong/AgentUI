@@ -193,30 +193,69 @@ def _extract_json_objects(text: str):
     return results
 
 
+def _lenient_json_loads(raw: str):
+    """宽容 JSON 解析：先标准解析，失败时尝试修复常见模型错误。"""
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+
+    # 常见错误 1：Windows 路径里用了未转义的单反斜杠，如 "D:\deepseek\..."
+    # 把字符串内单反斜杠替换为双反斜杠（避开已合法转义的 \\")
+    fixed = re.sub(r'(?<!\\)\\(?!\\|"|/|b|f|n|r|t|u)', r'\\\\', raw)
+    try:
+        return json.loads(fixed)
+    except Exception:
+        pass
+
+    return None
+
+
+def _tool_args_from_obj(obj: dict):
+    """从工具调用对象中提取 (name, args)，兼容多种模型习惯。
+
+    支持格式：
+    - {name: "list_dir", args: {path: ""}}
+    - {name: "list_dir", path: ""}（参数扁平化）
+    - {function: "list_dir", arguments: {...}} / {tool: "list_dir", parameters: {...}}
+    """
+    name = obj.get("name") or obj.get("function") or obj.get("tool")
+    if name not in TOOL_NAMES:
+        return None
+
+    # 优先显式 args / arguments / parameters
+    args = obj.get("args") or obj.get("arguments") or obj.get("parameters")
+    if isinstance(args, dict):
+        return name, args
+
+    # 否则把除 name 等元信息外的字段当作参数
+    skip = {"name", "function", "tool", "id", "type", "description", "reason", "thought"}
+    flat = {k: v for k, v in obj.items() if k not in skip}
+    return name, flat
+
+
 def _extract_call(text: str):
     """从模型输出里提取第一个工具调用，返回 (name, args) 或 None。
 
-    兼容三种模型输出形态：
+    兼容多种模型输出形态：
     1. 规范格式：<call>{"name":"...","args":{...}}</call>
-    2. 裸 JSON 对象：{"name":"...","args":{...}}
+    2. 裸 JSON 对象：{"name":"...","args":{...}} 或 {"name":"...","path":"..."}
     3. JSON 数组或连写多个对象：[{...},{...}] 或 {...}{...}{...}
        只取第一个合法工具调用，其余忽略（一次只执行一个工具）。
     """
     # 1. 优先规范 <call> 格式
     m = re.search(r"<call>\s*(\{.*?\})\s*</call>", text, re.DOTALL)
     if m:
-        try:
-            obj = json.loads(m.group(1))
-            if obj.get("name") in TOOL_NAMES:
-                return obj["name"], obj.get("args", {})
-        except Exception:
-            pass
+        obj = _lenient_json_loads(m.group(1))
+        if isinstance(obj, dict):
+            res = _tool_args_from_obj(obj)
+            if res:
+                return res
 
     # 2. 扫描文本中所有 JSON 对象/数组
     for raw in _extract_json_objects(text):
-        try:
-            obj_or_list = json.loads(raw)
-        except Exception:
+        obj_or_list = _lenient_json_loads(raw)
+        if not obj_or_list:
             continue
         candidates = []
         if isinstance(obj_or_list, dict):
@@ -224,8 +263,9 @@ def _extract_call(text: str):
         elif isinstance(obj_or_list, list):
             candidates.extend(obj_or_list)
         for obj in candidates:
-            if isinstance(obj, dict) and obj.get("name") in TOOL_NAMES:
-                return obj["name"], obj.get("args", {})
+            res = _tool_args_from_obj(obj)
+            if res:
+                return res
 
     return None
 
